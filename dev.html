@@ -1,0 +1,1100 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="公园打卡">
+<meta name="theme-color" content="#2f6b4f">
+<title>公园打卡地图</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.4/leaflet-maplibre-gl.js"></script>
+<script src="https://unpkg.com/pmtiles@4.4.1/dist/pmtiles.js"></script>
+<style>
+/* Layout: full-screen map; header on top; list as a bottom sheet on phones, a left panel on wide screens. */
+:root{
+  --bg:#f3f5f2; --surface:#ffffff; --surface-2:#eef2ec; --fg:#1c2420; --muted:#5d6a62; --line:#d6ddd4;
+  --accent:#2f6b4f; --accent-fg:#ffffff; --visited:#2e8b57; --todo:#7b857e; --way:#4a7fa8; --ward:#a05a37;
+  --stamp:#c4472f; --me:#2a6fdb; --shadow:0 6px 24px rgba(20,32,26,.16);
+  --font:"Hiragino Sans","PingFang SC","Noto Sans JP","Noto Sans SC","Microsoft YaHei",system-ui,sans-serif;
+  --peek:142px;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#111612; --surface:#19201b; --surface-2:#222b25; --fg:#e5ebe6; --muted:#9ba89f; --line:#2f3933;
+  --accent:#62b68a; --accent-fg:#0c1a12; --visited:#4cc07f; --todo:#8e9a92; --way:#73a9d3; --ward:#d58c60;
+  --stamp:#e3664c; --me:#5c9cff; --shadow:0 6px 24px rgba(0,0,0,.45); color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --bg:#111612; --surface:#19201b; --surface-2:#222b25; --fg:#e5ebe6; --muted:#9ba89f; --line:#2f3933;
+  --accent:#62b68a; --accent-fg:#0c1a12; --visited:#4cc07f; --todo:#8e9a92; --way:#73a9d3; --ward:#d58c60;
+  --stamp:#e3664c; --me:#5c9cff; --shadow:0 6px 24px rgba(0,0,0,.45); color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font:14px/1.5 var(--font);-webkit-tap-highlight-color:transparent;overflow:hidden}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+[hidden]{display:none!important}
+
+#app{position:fixed;inset:0;display:flex;flex-direction:column}
+.topbar{flex:none;z-index:500;background:var(--surface);border-bottom:1px solid var(--line);
+  padding:calc(env(safe-area-inset-top,0px) + 10px) max(16px,env(safe-area-inset-right,0px)) 10px max(16px,env(safe-area-inset-left,0px));
+  display:grid;grid-template-columns:auto 1fr auto;grid-template-areas:"brand . menu" "prog prog prog";gap:8px 12px;align-items:center}
+.brand{grid-area:brand;display:flex;align-items:center;gap:10px;min-width:0}
+.seal{width:34px;height:34px;flex:none;border:2px solid var(--stamp);color:var(--stamp);border-radius:6px;display:grid;place-items:center;
+  font-weight:700;font-size:17px;transform:rotate(-4deg);font-family:"Hiragino Mincho ProN","Noto Serif JP","Songti SC",serif}
+.brand h1{margin:0;font-size:17px;line-height:1.2;letter-spacing:.02em}
+.brand p{margin:0;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.icon-btn{grid-area:menu;border:1px solid var(--line);background:var(--surface-2);border-radius:10px;height:36px;padding:0 12px;font-size:13px}
+.progress{grid-area:prog;display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.pg{min-width:0}
+.pg .row{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.pg .row b{color:var(--fg);font-weight:600}
+.bar{height:6px;border-radius:3px;background:var(--surface-2);overflow:hidden;margin-top:3px}
+.bar i{display:block;height:100%;background:var(--visited);border-radius:3px;transition:width .4s}
+
+.mapwrap{position:relative;flex:1;min-height:0}
+#map{position:absolute;inset:0 0 var(--peek) 0;z-index:0;background:var(--surface-2)}
+.leaflet-container{font-family:var(--font)}
+.tiles-dark{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.9)}
+.fab{position:absolute;z-index:450;right:calc(10px + env(safe-area-inset-right,0px));bottom:calc(var(--peek) + 96px);
+  width:40px;height:40px;border-radius:10px;border:1px solid var(--line);background:var(--surface);box-shadow:var(--shadow);display:grid;place-items:center}
+.fab svg{width:20px;height:20px;stroke:var(--fg)}
+.fab.busy svg{animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Bottom sheet */
+.sheet{position:absolute;z-index:480;left:0;right:0;bottom:0;height:calc(var(--peek) + env(safe-area-inset-bottom,0px));
+  background:var(--surface);border-top:1px solid var(--line);border-radius:16px 16px 0 0;box-shadow:var(--shadow);
+  display:flex;flex-direction:column;transition:height .25s ease}
+.sheet[data-open="true"]{height:min(74%,680px)}
+.handle{flex:none;border:0;background:none;padding:8px max(16px,env(safe-area-inset-right,0px)) 4px max(16px,env(safe-area-inset-left,0px));
+  display:flex;flex-direction:column;align-items:center;gap:4px;width:100%}
+.grip{width:40px;height:4px;border-radius:2px;background:var(--line)}
+.handle .sum{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+.controls{flex:none;padding:4px max(16px,env(safe-area-inset-right,0px)) 10px max(16px,env(safe-area-inset-left,0px));display:flex;flex-direction:column;gap:8px}
+.controls input[type=search]{width:100%;height:38px;border:1px solid var(--line);background:var(--surface-2);border-radius:10px;padding:0 12px}
+.filters{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none}
+.filters::-webkit-scrollbar{display:none}
+.filters select{flex:none;height:32px;border:1px solid var(--line);background:var(--surface);border-radius:16px;padding:0 10px;font-size:13px}
+.list{flex:1;min-height:0;overflow-y:auto;margin:0;padding:0 0 calc(env(safe-area-inset-bottom,0px) + 12px);list-style:none;border-top:1px solid var(--line)}
+.sheet[data-open="false"] .list{display:none}
+.item{width:100%;display:grid;grid-template-columns:14px 1fr auto;gap:10px;align-items:center;text-align:left;border:0;background:none;
+  padding:10px max(16px,env(safe-area-inset-right,0px)) 10px max(16px,env(safe-area-inset-left,0px));border-bottom:1px solid var(--line)}
+.item:hover{background:var(--surface-2)}
+.dot{width:12px;height:12px;border-radius:50%;border:2px solid var(--todo);background:var(--surface)}
+.dot.way{border-radius:3px;border-color:var(--way)}
+.dot.done{background:var(--visited);border-color:var(--visited)}
+.item .txt{min-width:0}
+.item strong{display:block;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.item small{display:block;color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+.item .when{font-size:12px;color:var(--stamp);font-variant-numeric:tabular-nums;white-space:nowrap}
+.empty{padding:28px 16px;text-align:center;color:var(--muted)}
+
+/* Popup */
+.leaflet-popup-content-wrapper,.leaflet-popup-tip{background:var(--surface);color:var(--fg);box-shadow:var(--shadow)}
+.leaflet-popup-content{margin:14px 16px;width:250px!important}
+.leaflet-container a.leaflet-popup-close-button{color:var(--muted)}
+.pop h3{margin:0 18px 2px 0;font-size:16px;line-height:1.3;text-wrap:balance}
+.pop .meta{margin:0 0 10px;color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+.stamp-row{display:flex;gap:10px;align-items:center;margin:0 0 10px}
+.stamp{width:40px;height:40px;flex:none;border:2px solid var(--stamp);color:var(--stamp);border-radius:50%;display:grid;place-items:center;
+  font-weight:700;font-size:16px;transform:rotate(-10deg);font-family:"Hiragino Mincho ProN","Noto Serif JP","Songti SC",serif}
+.stamp-row div{font-size:13px;font-variant-numeric:tabular-nums}
+.stamp-row div span{display:block;color:var(--muted);font-size:12px}
+.pop label{display:block;font-size:12px;color:var(--muted);margin:0 0 3px}
+.pop input,.pop textarea{width:100%;border:1px solid var(--line);background:var(--surface-2);border-radius:8px;padding:6px 8px}
+.pop textarea{height:52px;resize:vertical;margin-top:6px}
+.pop .btns{display:flex;gap:8px;margin-top:10px}
+.btn{flex:1;height:36px;border-radius:9px;border:1px solid var(--line);background:var(--surface-2);font-weight:600}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
+.btn:disabled{opacity:.5;cursor:default}
+.btn.warn{color:var(--stamp)}
+.pop .links{display:flex;gap:14px;margin-top:10px;font-size:12px}
+.pop .links a{color:var(--accent)}
+
+/* Overlays */
+.overlay{position:absolute;inset:0;z-index:900;display:flex;align-items:center;justify-content:center;padding:16px max(16px,env(safe-area-inset-right,0px)) 16px max(16px,env(safe-area-inset-left,0px));background:color-mix(in srgb,var(--bg) 70%,transparent)}
+.card{width:min(380px,100%);background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px}
+.card h2{margin:0 0 6px;font-size:16px}
+.card p{margin:0 0 10px;color:var(--muted);font-size:13px}
+.card .btns{display:flex;gap:8px;flex-wrap:wrap}
+.spinner{width:22px;height:22px;border:3px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:spin .9s linear infinite;margin-bottom:10px}
+.menu{position:absolute;z-index:800;top:8px;right:max(12px,env(safe-area-inset-right,0px));width:min(320px,calc(100% - 24px))}
+.menu .card{padding:16px;max-height:calc(100vh - 200px);overflow-y:auto}
+.menu h2.sub{margin:18px 0 6px;font-size:14px}
+.muni-list h3{margin:12px 0 4px;font-size:12px;color:var(--muted);font-weight:600;letter-spacing:.04em}
+.muni-row{display:block;width:100%;border:0;background:none;padding:5px 0;text-align:left}
+.muni-row:hover .row span:first-child{color:var(--accent)}
+.progress.three{grid-template-columns:repeat(3,1fr)}
+.list .more{padding:12px 16px}
+.list .more .btn{width:100%}
+.loadbar{margin:0 0 12px}
+.menu .btn{width:100%;margin-top:8px;flex:none}
+.menu dl{margin:0 0 6px;display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:13px}
+.menu dt{color:var(--muted)}
+.menu dd{margin:0;font-variant-numeric:tabular-nums}
+/* Import results: full-screen, list scrolls inside, buttons stay visible */
+#fpPanel{position:fixed;z-index:1000;padding:calc(env(safe-area-inset-top,0px) + 12px) max(12px,env(safe-area-inset-right,0px)) calc(env(safe-area-inset-bottom,0px) + 12px) max(12px,env(safe-area-inset-left,0px))}
+.fp-card{max-height:100%;height:auto;display:flex;flex-direction:column;width:min(480px,100%);overflow:hidden}
+.fp-card > h2,.fp-card > p,.fp-tools{flex:none}
+.fp-card .btns{flex:none;padding-top:10px;border-top:1px solid var(--line)}
+.fp-card .btns .btn{height:44px}
+.fp-tools{display:flex;gap:14px;font-size:13px;margin-bottom:6px}
+.fp-tools button{border:0;background:none;color:var(--accent);padding:0}
+.fp-list{list-style:none;margin:0;padding:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;min-height:0;flex:1 1 auto;border-top:1px solid var(--line)}
+.fp-list label{display:grid;grid-template-columns:20px 1fr;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);cursor:pointer}
+.fp-list input{margin-top:3px;accent-color:var(--accent)}
+.fp-list strong{display:block;font-weight:600}
+.fp-list small{display:block;color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+.fp-list .tag{color:var(--visited);font-size:12px;margin-left:6px;font-weight:400}
+.toast{position:absolute;z-index:950;left:50%;transform:translateX(-50%);top:12px;background:var(--fg);color:var(--bg);
+  padding:8px 14px;border-radius:20px;font-size:13px;max-width:calc(100% - 32px);box-shadow:var(--shadow)}
+.leaflet-control-layers{background:var(--surface);color:var(--fg);border-color:var(--line)!important}
+.leaflet-bar a{background:var(--surface);color:var(--fg);border-color:var(--line)}
+.leaflet-control-attribution{background:color-mix(in srgb,var(--surface) 80%,transparent)!important;color:var(--muted)}
+.leaflet-control-attribution a{color:var(--accent)}
+
+@media (min-width:900px){
+  :root{--peek:0px}
+  .topbar{grid-template-columns:auto 1fr auto;grid-template-areas:"brand prog menu"}
+  .progress{max-width:460px;justify-self:center;width:100%}
+  .sheet,.sheet[data-open="true"],.sheet[data-open="false"]{top:0;right:auto;width:380px;height:auto;border-radius:0;border-top:0;border-right:1px solid var(--line);box-shadow:none}
+  .sheet .list{display:block!important}
+  .handle{pointer-events:none;padding-top:12px}
+  .grip{display:none}
+  #map{left:380px}
+  .fab{bottom:96px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="topbar" id="topbar">
+    <div class="brand">
+      <span class="seal" aria-hidden="true">園</span>
+      <div><h1>公园打卡</h1><p id="subtitle">东京都 23区＋多摩</p></div>
+    </div>
+    <div class="progress" id="progress"></div>
+    <button class="icon-btn" id="menuBtn" aria-expanded="false" aria-controls="menu">数据</button>
+  </header>
+
+  <div class="mapwrap">
+    <div id="map" aria-label="公园地图"></div>
+    <button class="fab" id="locBtn" aria-label="定位到我的位置" title="我的位置">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.2" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+    </button>
+
+    <section class="sheet" id="sheet" data-open="false" aria-label="公园列表">
+      <button class="handle" id="sheetToggle" aria-expanded="false"><span class="grip"></span><span class="sum" id="sheetSummary">列表</span></button>
+      <div class="controls">
+        <input id="q" type="search" placeholder="搜索名称，中文日文都行，比如 驹泽、緑道" autocomplete="off">
+        <div class="filters">
+          <select id="fMuni" aria-label="区域"></select>
+          <select id="fKind" aria-label="类型"><option value="all">全部类型</option><option value="park">公园</option><option value="greenway">绿道</option><option value="garden">庭园</option></select>
+          <select id="fStatus" aria-label="状态"><option value="all">全部状态</option><option value="todo">未打卡</option><option value="done">已打卡</option></select>
+          <select id="fSort" aria-label="排序"><option value="size">按面积</option><option value="name">按名称</option><option value="dist">离我最近</option><option value="recent">最近打卡</option></select>
+        </div>
+      </div>
+      <ul class="list" id="list"></ul>
+    </section>
+
+    <div class="menu" id="menu" hidden>
+      <div class="card">
+        <h2>数据</h2>
+        <dl>
+          <dt>公园数据</dt><dd id="mData">—</dd>
+          <dt>更新时间</dt><dd id="mTime">—</dd>
+          <dt>已打卡</dt><dd id="mRec">—</dd>
+        </dl>
+        <p>公园和绿道数据来自 OpenStreetMap，下载一次后保存在这个浏览器里。打卡记录也只存在这个浏览器，换设备前先导出。</p>
+        <button class="btn" id="refreshBtn">重新下载公园数据</button>
+        <button class="btn" id="exportBtn">导出打卡记录</button>
+        <button class="btn" id="importBtn">导入打卡记录</button>
+        <input type="file" id="importFile" accept="application/json,.json" hidden>
+        <button class="btn primary" id="fpBtn">从一生足迹导入</button>
+        <input type="file" id="fpFile" accept=".csv,text/csv" multiple hidden>
+        <h2 class="sub">各区市进度</h2>
+        <div class="muni-list" id="muniList"></div>
+      </div>
+    </div>
+
+    <div class="overlay" id="fpPanel" hidden>
+      <div class="card fp-card" role="dialog" aria-labelledby="fpTitle">
+        <h2 id="fpTitle">足迹比对结果</h2>
+        <p id="fpSummary"></p>
+        <div class="fp-tools"><button type="button" id="fpAll">全选</button><button type="button" id="fpNone">全不选</button></div>
+        <ul class="fp-list" id="fpList"></ul>
+        <div class="btns"><button class="btn" id="fpCancel" type="button">先不打卡</button><button class="btn primary" id="fpApply" type="button">打卡选中的</button></div>
+      </div>
+    </div>
+
+    <div class="overlay" id="loading" hidden>
+      <div class="card" role="status">
+        <div class="spinner" id="spin"></div>
+        <h2 id="loadTitle">正在准备地图</h2>
+        <p id="loadText">第一次打开需要从 OpenStreetMap 下载全东京的公园数据。</p>
+        <div class="bar loadbar" id="loadBar" hidden><i></i></div>
+        <div class="btns" id="loadBtns" hidden><button class="btn primary" id="retryBtn">重试</button></div>
+      </div>
+    </div>
+    <div class="toast" id="toast" role="status" hidden></div>
+  </div>
+</div>
+
+<script>
+(function(){
+'use strict';
+
+// ---------- Config ----------
+// Tokyo mainland: 23 wards + Tama (islands are left out).
+var MUNIS_23 = ['千代田区','中央区','港区','新宿区','文京区','台東区','墨田区','江東区','品川区','目黒区','大田区','世田谷区','渋谷区','中野区','杉並区','豊島区','北区','荒川区','板橋区','練馬区','足立区','葛飾区','江戸川区'];
+var MUNIS_TAMA = ['八王子市','立川市','武蔵野市','三鷹市','青梅市','府中市','昭島市','調布市','町田市','小金井市','小平市','日野市','東村山市','国分寺市','国立市','福生市','狛江市','東大和市','清瀬市','東久留米市','武蔵村山市','多摩市','稲城市','羽村市','あきる野市','西東京市','瑞穂町','日の出町','檜原村','奥多摩町'];
+var MUNIS = MUNIS_23.concat(MUNIS_TAMA);
+var IS23 = {}; MUNIS_23.forEach(function(m){ IS23[m] = true; });
+var TOKYO_BBOX = [35.48, 138.94, 35.91, 139.93]; // s,w,n,e
+// Download in strips so each Overpass request stays small; dense wards get narrow strips.
+var CHUNKS = [
+  {label:'奥多摩・檜原・青梅一带', b:[35.64, 138.94, 35.91, 139.20]},
+  {label:'八王子・町田西部一带',   b:[35.50, 139.20, 35.86, 139.38]},
+  {label:'多摩中部（立川・日野・多摩）', b:[35.50, 139.38, 35.82, 139.50]},
+  {label:'多摩东部（府中・小金井・三鷹）', b:[35.56, 139.50, 35.81, 139.60]},
+  {label:'世田谷・杉並・練馬一带', b:[35.57, 139.60, 35.79, 139.68]},
+  {label:'渋谷・新宿・板橋一带',   b:[35.52, 139.68, 35.80, 139.74]},
+  {label:'都心・品川・北区一带',   b:[35.52, 139.74, 35.82, 139.80]},
+  {label:'下町・江东・足立一带',   b:[35.55, 139.80, 35.82, 139.93]}
+];
+var KIND_LABEL = {park:'公园', greenway:'绿道', garden:'庭园'};
+// The main server sometimes answers 502 when busy; it usually works a few seconds later, so it is retried between the mirrors.
+var MAIN = 'https://overpass-api.de/api/interpreter';
+var ENDPOINTS = [MAIN, MAIN, 'https://overpass.kumi.systems/api/interpreter', MAIN, 'https://overpass.private.coffee/api/interpreter', MAIN];
+var DATA_VER = 3;
+var K = {rec:'tpm.checkins.v1', seed:'tpm.seeded.v1', base:'tpm.base.v1', ui:'tpm.ui.v2', view:'tpm.view.v1'};
+// Parks visited before this app existed. Matched once against exact OSM names.
+var SEED_NAMES = ['蘆花恒春園','羽根木公園','駒沢オリンピック公園','世田谷公園','和田堀公園','善福寺川緑地','杉並児童交通公園','高井戸公園','下高井戸おおぞら公園',
+  '小金井公園','葛西臨海公園','光が丘公園','代々木公園','新宿御苑','上野恩賜公園','上野公園','井の頭恩賜公園','井の頭公園','武蔵野公園','野川公園',
+  '北の丸公園','日比谷公園','皇居東御苑','芝公園','小宮公園'];
+var ZH_JA = {'驹':'駒','泽':'沢','绿':'緑','园':'園','芦':'蘆','并':'並','儿':'児','广':'広','场':'場','冈':'岡','桥':'橋','乌':'烏','带':'帯',
+  '宫':'宮','树':'樹','滨':'浜','泷':'滝','边':'辺','东':'東','门':'門','马':'馬','鸟':'鳥','叶':'葉','樱':'桜','观':'観','见':'見','冢':'塚',
+  '户':'戸','给':'給','纪':'紀','风':'風','车':'車','运':'運','动':'動','乐':'楽','馆':'館','亲':'親','乡':'郷','庄':'荘','龙':'竜','丰':'豊',
+  '荣':'栄','岛':'島','汤':'湯','闲':'閑','阳':'陽','灵':'霊','宽':'寛','实':'実','经':'経','发':'発','杂':'雑','击':'撃','间':'間','开':'開',
+  '长':'長','云':'雲','业':'業','坛':'壇','们':'們','农':'農','爱':'愛','区':'区','市':'市','滩':'灘','临':'臨','丸':'丸','御':'御','恩':'恩',
+  '赐':'賜','头':'頭','渊':'淵','国':'国','营':'営','记':'記','宝':'宝','圣':'聖','横':'横','仓':'倉','鹤':'鶴','龟':'亀','狮':'獅'};
+
+// ---------- Storage ----------
+var S = {
+  get: function(k, d){ try{ var v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); }catch(e){ return d; } },
+  set: function(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); return true; }catch(e){ return false; } }
+};
+// Big data (park shapes for all of Tokyo) goes to IndexedDB; localStorage is too small.
+var DB = (function(){
+  var p = null;
+  function open(){
+    if(p) return p;
+    p = new Promise(function(res, rej){
+      try{ var r = indexedDB.open('park-checkin', 1);
+        r.onupgradeneeded = function(){ r.result.createObjectStore('kv'); };
+        r.onsuccess = function(){ res(r.result); }; r.onerror = function(){ rej(r.error); };
+      }catch(e){ rej(e); }
+    });
+    return p;
+  }
+  function tx(mode, fn){ return open().then(function(db){ return new Promise(function(res, rej){ var t = db.transaction('kv', mode), st = t.objectStore('kv'), out = fn(st); t.oncomplete = function(){ res(out && out.result); }; t.onerror = function(){ rej(t.error); }; }); }); }
+  return {
+    get: function(k){ return tx('readonly', function(st){ return st.get(k); }).catch(function(){ return undefined; }); },
+    set: function(k, v){ return tx('readwrite', function(st){ st.put(v, k); }).then(function(){ return true; }).catch(function(){ return false; }); },
+    del: function(k){ return tx('readwrite', function(st){ st.delete(k); }).catch(function(){}); }
+  };
+})();
+try{ localStorage.removeItem('tpm.data.v1'); localStorage.removeItem('tpm.data.v2'); }catch(e){}
+
+var DATA = null, BYID = new Map(), LAYERS = new Map(), SHOWN = new Map(), REC = S.get(K.rec, {}) || {}, me = null, meMarker = null, currentId = null;
+var ui = S.get(K.ui, {}) || {};
+var filt = {muni: ui.muni || 'all', kind: ui.kind || 'all', status: ui.status || 'all', sort: ui.sort === 'dist' ? 'size' : (ui.sort || 'size'), q: ''};
+var listLimit = 200;
+
+function $(s){ return document.querySelector(s); }
+function el(tag, cls, text){ var n = document.createElement(tag); if(cls) n.className = cls; if(text != null) n.textContent = text; return n; }
+function today(){ var d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0,10); }
+function saveRec(){ if(!S.set(K.rec, REC)) toast('打卡记录没能保存到浏览器，请检查是否开了无痕模式'); }
+function saveUi(){ S.set(K.ui, {muni:filt.muni, kind:filt.kind, status:filt.status, sort:filt.sort}); }
+function isMobile(){ return window.innerWidth < 900; }
+
+var toastTimer = null;
+function toast(msg){ var t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(function(){ t.hidden = true; }, 3600); }
+
+// ---------- Colors from CSS tokens ----------
+var C = {};
+function tok(n){ return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+function readColors(){ C = {visited:tok('--visited'), todo:tok('--todo'), way:tok('--way'), ward:tok('--ward'), me:tok('--me'), surface:tok('--surface')}; }
+readColors();
+
+// ---------- Geometry helpers ----------
+function r5(x){ return Math.round(x * 1e5) / 1e5; }
+function eq(a, b){ return a[0] === b[0] && a[1] === b[1]; }
+function joinRings(ways){
+  var rest = ways.filter(function(w){ return w.length > 1; }).map(function(w){ return w.slice(); });
+  var rings = [];
+  while(rest.length){
+    var ring = rest.shift(), guard = 0;
+    while(!eq(ring[0], ring[ring.length-1]) && guard++ < 5000){
+      var end = ring[ring.length-1];
+      var idx = rest.findIndex(function(w){ return eq(w[0], end) || eq(w[w.length-1], end); });
+      if(idx < 0) break;
+      var w = rest.splice(idx, 1)[0];
+      if(!eq(w[0], end)) w.reverse();
+      ring = ring.concat(w.slice(1));
+    }
+    rings.push(ring);
+  }
+  return rings;
+}
+function ringArea(r){
+  if(r.length < 3) return 0;
+  var lat0 = r[0][0] * Math.PI / 180, kx = 111320 * Math.cos(lat0), ky = 110540, s = 0;
+  for(var i = 0, j = r.length - 1; i < r.length; j = i++){ s += (r[j][1]*kx) * (r[i][0]*ky) - (r[i][1]*kx) * (r[j][0]*ky); }
+  return Math.abs(s / 2);
+}
+function hav(a, b){
+  var R = 6371000, p1 = a[0]*Math.PI/180, p2 = b[0]*Math.PI/180, dp = p2 - p1, dl = (b[1]-a[1])*Math.PI/180;
+  var x = Math.sin(dp/2)*Math.sin(dp/2) + Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)*Math.sin(dl/2);
+  return 2 * R * Math.asin(Math.sqrt(x));
+}
+function lineLen(c){ var s = 0; for(var i = 1; i < c.length; i++) s += hav(c[i-1], c[i]); return s; }
+function bboxOf(pts){
+  var b = [Infinity, Infinity, -Infinity, -Infinity];
+  pts.forEach(function(p){ if(p[0]<b[0])b[0]=p[0]; if(p[1]<b[1])b[1]=p[1]; if(p[0]>b[2])b[2]=p[0]; if(p[1]>b[3])b[3]=p[1]; });
+  return b;
+}
+function bboxCenter(pts){ var b = bboxOf(pts); return [r5((b[0]+b[2])/2), r5((b[1]+b[3])/2)]; }
+function inRing(lat, lon, r){
+  var inside = false;
+  for(var i = 0, j = r.length - 1; i < r.length; j = i++){
+    var yi = r[i][0], xi = r[i][1], yj = r[j][0], xj = r[j][1];
+    if(((yi > lat) !== (yj > lat)) && (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+function simplify(c, minM){ // drop points closer than minM metres to the last kept point
+  if(c.length < 4) return c;
+  var out = [c[0]];
+  for(var i = 1; i < c.length - 1; i++){ if(hav(out[out.length-1], c[i]) >= minM) out.push(c[i]); }
+  out.push(c[c.length-1]); return out;
+}
+function fmtSize(e){
+  if(e.len){ return e.len >= 1000 ? '全长约 ' + (e.len/1000).toFixed(1) + ' km' : '全长约 ' + Math.round(e.len) + ' m'; }
+  if(e.area){ return e.area >= 10000 ? '约 ' + (e.area/10000).toFixed(1) + ' ha' : '约 ' + Math.round(e.area).toLocaleString() + ' m²'; }
+  return '面积未知';
+}
+function fmtDist(m){ return m >= 1000 ? (m/1000).toFixed(1) + ' km' : Math.round(m) + ' m'; }
+
+// ---------- Overpass ----------
+function boundaryQuery(){
+  return '[out:json][timeout:180];\nrel["boundary"="administrative"]["admin_level"="7"]["name"~"^(' + MUNIS.join('|') + ')$"](' + TOKYO_BBOX.join(',') + ');\nout geom;';
+}
+function chunkQuery(b){
+  var bb = '(' + b.join(',') + ')';
+  return '[out:json][timeout:180];\n(\n' +
+    '  nwr["leisure"="park"]["name"]' + bb + ';\n' +
+    '  nwr["leisure"="garden"]["name"]["access"!~"^(private|no)$"]' + bb + ';\n' +
+    '  way["name"~"緑道"]["building"!~"."]' + bb + ';\n' +
+    '  rel["name"~"緑道"]' + bb + ';\n' +
+    ');\nout geom;';
+}
+function overpass(q){
+  var i = 0, lastErr = null;
+  function next(){
+    if(i >= ENDPOINTS.length) return Promise.reject(lastErr || new Error('没有可用的数据服务器'));
+    var url = ENDPOINTS[i++], ctl = new AbortController(), t = setTimeout(function(){ ctl.abort(); }, 200000);
+    return fetch(url, {method:'POST', body:'data=' + encodeURIComponent(q),
+      headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'}, signal:ctl.signal})
+      .then(function(res){ clearTimeout(t); if(!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
+      .then(function(j){ if(j.remark && /runtime error/i.test(j.remark)) throw new Error(j.remark); return j; })
+      .catch(function(e){ clearTimeout(t); lastErr = e; return new Promise(function(r){ setTimeout(r, 4000); }).then(next); });
+  }
+  return next();
+}
+
+// ---------- Data processing ----------
+function geomsOf(e){
+  var tags = e.tags || {}, out = [];
+  var isArea = !!tags.leisure || tags.area === 'yes';
+  if(e.type === 'node'){ out.push({t:'pt', c:[e.lat, e.lon]}); }
+  else if(e.type === 'way' && e.geometry){
+    var c = e.geometry.filter(Boolean).map(function(p){ return [p.lat, p.lon]; });
+    if(c.length < 2) return out;
+    if(isArea && c.length > 3 && eq(c[0], c[c.length-1])) out.push({t:'poly', r:c}); else out.push({t:'line', c:c});
+  } else if(e.type === 'relation' && e.members){
+    var ways = e.members.filter(function(m){ return m.type === 'way' && m.geometry; });
+    var outer = ways.filter(function(m){ return m.role === 'outer' || m.role === ''; }).map(function(m){ return m.geometry.filter(Boolean).map(function(p){ return [p.lat, p.lon]; }); });
+    if(tags.type === 'multipolygon' || isArea){
+      joinRings(outer).forEach(function(r){ if(r.length > 3 && eq(r[0], r[r.length-1])) out.push({t:'poly', r:r}); else if(r.length > 1) out.push({t:'line', c:r}); });
+    } else {
+      ways.forEach(function(m){ var c = m.geometry.filter(Boolean).map(function(p){ return [p.lat, p.lon]; }); if(c.length > 1) out.push({t:'line', c:c}); });
+    }
+  }
+  return out;
+}
+// Municipality polygons for point-in-polygon lookups.
+function buildMuniIndex(boundaryEls){
+  var idx = [], lines = [];
+  boundaryEls.forEach(function(e){
+    var name = e.tags && e.tags.name; if(MUNIS.indexOf(name) < 0) return;
+    var outer = (e.members || []).filter(function(m){ return m.type === 'way' && m.geometry && m.role !== 'inner'; })
+      .map(function(m){ return m.geometry.filter(Boolean).map(function(p){ return [p.lat, p.lon]; }); });
+    joinRings(outer).forEach(function(r){
+      var s = simplify(r, 50).map(function(p){ return [r5(p[0]), r5(p[1])]; });
+      if(s.length > 3 && eq(r[0], r[r.length-1])){ if(!eq(s[0], s[s.length-1])) s.push(s[0]); idx.push({name:name, r:s, b:bboxOf(s)}); }
+      lines.push(s);
+    });
+  });
+  return {rings:idx, lines:lines};
+}
+function extremes(all){ // centre plus the four outermost vertices: enough to tell which municipalities a place touches
+  if(all.length < 3) return all;
+  var b = bboxOf(all), out = [[(b[0]+b[2])/2, (b[1]+b[3])/2]], pick = [null, null, null, null];
+  all.forEach(function(p){ if(!pick[0] || p[0] < pick[0][0]) pick[0] = p; if(!pick[1] || p[0] > pick[1][0]) pick[1] = p; if(!pick[2] || p[1] < pick[2][1]) pick[2] = p; if(!pick[3] || p[1] > pick[3][1]) pick[3] = p; });
+  return out.concat(pick);
+}
+function munisAt(pts, mi){
+  var hit = [];
+  pts.forEach(function(p){
+    mi.rings.forEach(function(x){
+      if(hit.indexOf(x.name) >= 0) return;
+      if(p[0] < x.b[0] || p[0] > x.b[2] || p[1] < x.b[1] || p[1] > x.b[3]) return;
+      if(inRing(p[0], p[1], x.r)) hit.push(x.name);
+    });
+  });
+  return hit;
+}
+function processData(boundaryEls, chunkEls){
+  var mi = buildMuniIndex(boundaryEls);
+  if(!mi.rings.length) throw new Error('没有拿到东京各区市的边界');
+  var seen = new Set(), raw = [];
+  chunkEls.forEach(function(els){ els.forEach(function(e){
+    var key = e.type + '/' + e.id; if(seen.has(key)) return; seen.add(key);
+    var tags = e.tags || {}, name = tags.name; if(!name) return;
+    var kind = /緑道/.test(name) ? 'greenway' : (tags.leisure === 'garden' ? 'garden' : (tags.leisure === 'park' ? 'park' : null));
+    if(!kind) return;
+    var g = geomsOf(e); if(!g.length) return;
+    var all = []; g.forEach(function(x){ if(x.t === 'pt') all.push(x.c); else (x.r || x.c).forEach(function(p){ all.push(p); }); });
+    var pts = extremes(all);
+    var munis = munisAt(pts, mi); if(!munis.length) return; // outside mainland Tokyo
+    var alts = [tags['name:ja'], tags.alt_name, tags.official_name, tags.old_name, tags['name:zh']].filter(Boolean);
+    raw.push({osm:key, name:name, kind:kind, munis:munis, geoms:g, alts:alts, center:bboxCenter(pts)});
+  }); });
+  // Merge pieces of one place: same name and kind, near each other.
+  var groups = new Map(), clusters = [];
+  raw.sort(function(a, b){ return a.osm < b.osm ? -1 : 1; });
+  raw.forEach(function(x){
+    var gk = x.kind + '|' + x.name, list = groups.get(gk); if(!list){ list = []; groups.set(gk, list); }
+    var lim = x.kind === 'greenway' ? 2500 : 1200, target = null;
+    for(var i = 0; i < list.length && !target; i++){ for(var j = 0; j < list[i].cs.length; j++){ if(hav(list[i].cs[j], x.center) < lim){ target = list[i]; break; } } }
+    if(!target){ target = {name:x.name, kind:x.kind, munis:[], geoms:[], alts:[], osm:x.osm, cs:[]}; list.push(target); clusters.push(target); }
+    target.cs.push(x.center);
+    x.munis.forEach(function(m){ if(target.munis.indexOf(m) < 0) target.munis.push(m); });
+    x.alts.forEach(function(a){ if(target.alts.indexOf(a) < 0) target.alts.push(a); });
+    target.geoms = target.geoms.concat(x.geoms);
+  });
+  var entities = clusters.map(function(cl){
+    var list = groups.get(cl.kind + '|' + cl.name);
+    var e = {id:(cl.kind === 'greenway' ? 'g|' : 'p|') + cl.name + (list.length > 1 ? '|' + cl.osm : ''), name:cl.name, kind:cl.kind,
+      munis:cl.munis.sort(function(a, b){ return MUNIS.indexOf(a) - MUNIS.indexOf(b); }), alts:cl.alts, osm:cl.osm};
+    var area = 0, len = 0, longest = null, bigRing = null, allPts = [];
+    cl.geoms.forEach(function(g){
+      if(g.t === 'poly'){ var a = ringArea(g.r); area += a; if(!bigRing || a > bigRing.a) bigRing = {a:a, r:g.r}; }
+      if(g.t === 'line'){ var l = lineLen(g.c); len += l; if(!longest || l > longest.l) longest = {l:l, c:g.c}; }
+      if(g.t === 'pt') allPts.push(g.c);
+    });
+    if(cl.kind === 'greenway' && longest){ e.len = Math.round(len); var m = longest.c[Math.floor(longest.c.length/2)]; e.center = [r5(m[0]), r5(m[1])]; }
+    else if(bigRing){ e.area = Math.round(area); e.center = bboxCenter(bigRing.r); }
+    else e.center = [r5(allPts[0][0]), r5(allPts[0][1])];
+    if(cl.kind === 'greenway' && !e.len && area) e.area = Math.round(area);
+    e.geoms = cl.geoms.filter(function(g){ return g.t !== 'pt'; }).map(function(g){
+      return g.t === 'poly' ? {t:'poly', r:simplify(g.r, 3).map(function(p){ return [r5(p[0]), r5(p[1])]; })} : {t:'line', c:simplify(g.c, 3).map(function(p){ return [r5(p[0]), r5(p[1])]; })};
+    });
+    var all = []; e.geoms.forEach(function(g){ (g.r || g.c).forEach(function(p){ all.push(p); }); });
+    e.bb = all.length ? bboxOf(all) : null;
+    return e;
+  });
+  return {v:DATA_VER, fetchedAt:new Date().toISOString(), boundaries:mi.lines, entities:entities};
+}
+
+// ---------- Map ----------
+var map = L.map('map', {zoomControl:false, preferCanvas:true});
+map.attributionControl.setPrefix('<a href="https://leafletjs.com">Leaflet</a>');
+L.control.zoom({position:'bottomright', zoomInTitle:'放大', zoomOutTitle:'缩小'}).addTo(map);
+// Base maps. Vector maps (drawn by MapLibre at the screen's real resolution) stay sharp on phones;
+// the 地理院 raster tiles are 256px images and look soft on Retina screens, so they are only a fallback.
+var gsiAttr = '<a href="https://maps.gsi.go.jp/development/ichiran.html">地理院タイル</a>';
+var gsi = function(id, ext, extra){ return L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/' + id + '/{z}/{x}/{y}.' + ext, Object.assign({maxNativeZoom:18, maxZoom:20, attribution:gsiAttr}, extra || {})); };
+var hasGL = false;
+try{ var cv = document.createElement('canvas'); hasGL = !!(window.maplibregl && L.maplibreGL && (cv.getContext('webgl2') || cv.getContext('webgl'))); }catch(e){ hasGL = false; }
+if(hasGL && window.pmtiles){ try{ var pmProto = new pmtiles.Protocol(); maplibregl.addProtocol('pmtiles', pmProto.tile); }catch(e){} }
+var ofmAttr = '<a href="https://openfreemap.org">OpenFreeMap</a> &copy; <a href="https://www.openmaptiles.org/">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
+function jaLabels(style){ // OpenFreeMap labels default to Latin names; show Japanese names instead
+  (style.layers || []).forEach(function(l){
+    var tf = l.layout && l.layout['text-field'];
+    if(tf && JSON.stringify(tf).indexOf('name') >= 0) l.layout['text-field'] = ['coalesce', ['get', 'name:ja'], ['get', 'name'], ['get', 'name_en']];
+  });
+  return style;
+}
+function glBase(url, attr, fixLabels){
+  var lyr = L.maplibreGL({style:url, attribution:attr, maxZoom:20});
+  if(fixLabels) lyr.on('add', function(){
+    var m = lyr.getMaplibreMap && lyr.getMaplibreMap();
+    if(m && !lyr._jaFixed){ lyr._jaFixed = true; m.setStyle(url, {transformStyle:function(prev, next){ return jaLabels(next); }}); }
+  });
+  return lyr;
+}
+var bases = hasGL ? {
+  '浅色': glBase('https://tiles.openfreemap.org/styles/positron', ofmAttr, true),
+  '彩色': glBase('https://tiles.openfreemap.org/styles/liberty', ofmAttr, true),
+  '深色': glBase('https://tiles.openfreemap.org/styles/dark', ofmAttr, true),
+  '地理院': glBase('https://gsi-cyberjapan.github.io/optimal_bvmap/style/std.json', '<a href="https://maps.gsi.go.jp/development/ichiran.html">地理院地図Vector</a>', false),
+  '地理院（图片）': gsi('pale', 'png'),
+  '航拍': gsi('seamlessphoto', 'jpg')
+} : {
+  '浅色': gsi('pale', 'png'),
+  '标准': gsi('std', 'png'),
+  '深色': gsi('pale', 'png', {className:'tiles-dark'}),
+  '航拍': gsi('seamlessphoto', 'jpg')
+};
+map.attributionControl.addAttribution('公园数据 &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> 贡献者');
+var darkPref = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+var baseName = S.get(K.base, null);
+if(!bases[baseName]) baseName = darkPref ? '深色' : '浅色';
+bases[baseName].addTo(map);
+L.control.layers(bases, null, {position:'topright'}).addTo(map);
+map.on('baselayerchange', function(e){ S.set(K.base, e.name); });
+map.createPane('shapes').style.zIndex = 410;
+map.createPane('dots').style.zIndex = 420;
+var view = S.get(K.view, null);
+if(view && view.c && view.z) map.setView(view.c, view.z); else map.fitBounds([[35.55, 139.0], [35.85, 139.92]]);
+map.on('moveend', function(){ var c = map.getCenter(); S.set(K.view, {c:[r5(c.lat), r5(c.lng)], z:map.getZoom()}); });
+var boundaryLayer = L.layerGroup().addTo(map), shapeLayer = L.layerGroup().addTo(map), dotLayer = L.layerGroup().addTo(map);
+var popup = L.popup({maxWidth:290, autoPanPaddingTopLeft:[16, 16], autoPanPaddingBottomRight:[16, 24]});
+var SHAPE_ZOOM = 14;
+
+function dotRadius(e){ var z = map.getZoom(); if(z < 12) return 2.5; if(z < 14) return e.kind === 'greenway' ? 2.5 : 3.5; return e.kind === 'greenway' ? 4 : ((e.area || 0) > 100000 ? 7 : 5); }
+function styleOf(e){
+  var v = !!REC[e.id], r = dotRadius(e), small = map.getZoom() < 14;
+  if(e.kind === 'greenway') return {
+    line:{color:v ? C.visited : C.way, weight:v ? 5 : 4, opacity:.9, dashArray:v ? null : '6 6', pane:'shapes'},
+    poly:{color:v ? C.visited : C.way, weight:1.5, fillColor:v ? C.visited : C.way, fillOpacity:v ? .38 : .16, dashArray:v ? null : '4 4', pane:'shapes'},
+    dot:{radius:r, color:v ? C.surface : C.way, weight:small ? 1 : 2, fillColor:v ? C.visited : C.way, fillOpacity:1, pane:'dots'}
+  };
+  return {
+    poly:{color:v ? C.visited : C.todo, weight:v ? 2 : 1.2, fillColor:v ? C.visited : C.todo, fillOpacity:v ? .4 : .12, dashArray:null, pane:'shapes'},
+    line:{color:v ? C.visited : C.todo, weight:3, dashArray:null, pane:'shapes'},
+    dot:{radius:r, color:v ? C.surface : C.todo, weight:small ? 1 : 2, fillColor:v ? C.visited : C.surface, fillOpacity:1, pane:'dots'}
+  };
+}
+function layersFor(e){
+  var L2 = LAYERS.get(e.id); if(L2) return L2;
+  var st = styleOf(e), click = function(ev){ L.DomEvent.stopPropagation(ev); openEntity(e.id, false); };
+  var parts = e.geoms.map(function(g){ var lyr = g.t === 'poly' ? L.polygon(g.r, st.poly) : L.polyline(g.c, st.line); lyr._kind = g.t; lyr.on('click', click); return lyr; });
+  var dot = L.circleMarker(e.center, st.dot); dot.on('click', click);
+  L2 = {parts:parts, dot:dot}; LAYERS.set(e.id, L2); return L2;
+}
+function restyle(e){
+  var L2 = LAYERS.get(e.id); if(!L2) return; var st = styleOf(e);
+  L2.parts.forEach(function(p){ p.setStyle(p._kind === 'poly' ? st.poly : st.line); });
+  L2.dot.setStyle(st.dot); L2.dot.setRadius(st.dot.radius);
+}
+// Only draw what is on screen: dots always, shapes from zoom 14.
+var lastZoomBucket = null;
+function refreshView(){
+  if(!DATA) return;
+  var b = map.getBounds().pad(0.25), s = b.getSouth(), w = b.getWest(), n = b.getNorth(), ea = b.getEast(), z = map.getZoom();
+  var shapes = z >= SHAPE_ZOOM, bucket = z < 12 ? 0 : (z < 14 ? 1 : 2), want = new Set();
+  DATA.entities.forEach(function(e){
+    var bb = e.bb;
+    if(bb ? (bb[2] >= s && bb[0] <= n && bb[3] >= w && bb[1] <= ea) : (e.center[0] >= s && e.center[0] <= n && e.center[1] >= w && e.center[1] <= ea)) want.add(e.id);
+  });
+  SHOWN.forEach(function(st, id){
+    if(want.has(id)) return; var L2 = LAYERS.get(id);
+    dotLayer.removeLayer(L2.dot); if(st.shapes) L2.parts.forEach(function(p){ shapeLayer.removeLayer(p); });
+    SHOWN.delete(id);
+  });
+  var restyleAll = bucket !== lastZoomBucket; lastZoomBucket = bucket;
+  want.forEach(function(id){
+    var e = BYID.get(id), L2 = layersFor(e), st = SHOWN.get(id);
+    if(!st){ st = {shapes:false}; SHOWN.set(id, st); L2.dot.addTo(dotLayer); if(!restyleAll) restyle(e); }
+    if(shapes && !st.shapes){ L2.parts.forEach(function(p){ p.addTo(shapeLayer); }); st.shapes = true; }
+    else if(!shapes && st.shapes){ L2.parts.forEach(function(p){ shapeLayer.removeLayer(p); }); st.shapes = false; }
+    if(restyleAll) restyle(e);
+  });
+}
+map.on('moveend', refreshView);
+function drawAll(){
+  shapeLayer.clearLayers(); dotLayer.clearLayers(); boundaryLayer.clearLayers(); LAYERS.clear(); SHOWN.clear(); lastZoomBucket = null;
+  DATA.boundaries.forEach(function(c){ if(c.length > 1) L.polyline(c, {color:C.ward, weight:1.5, opacity:.6, dashArray:'2 6', interactive:false}).addTo(boundaryLayer); });
+  refreshView();
+}
+
+// ---------- Popup ----------
+function muniLabel(e){ return e.munis.join(' / '); }
+function openEntity(id, fly){
+  var e = BYID.get(id); if(!e) return;
+  currentId = id;
+  var show = function(){ popup.setLatLng(e.center).setContent(popupNode(e)).openOn(map); };
+  if(fly){
+    var z = e.kind === 'greenway' ? 15 : ((e.area || 0) > 200000 ? 15 : 16);
+    map.once('moveend', show); map.flyTo(e.center, Math.max(map.getZoom(), z), {duration:.6});
+  } else show();
+}
+function popupNode(e){
+  var r = REC[e.id], root = el('div', 'pop');
+  root.appendChild(el('h3', null, e.name));
+  root.appendChild(el('p', 'meta', KIND_LABEL[e.kind] + ' · ' + muniLabel(e) + ' · ' + fmtSize(e) + (me ? ' · 距你 ' + fmtDist(hav(me, e.center)) : '')));
+  if(r){
+    var row = el('div', 'stamp-row'); row.appendChild(el('span', 'stamp', '済'));
+    var t = el('div', null, r.date ? r.date.replace(/-/g, '.') + ' 打卡' : '已打卡');
+    if(r.note) t.appendChild(el('span', null, r.note)); else if(!r.date) t.appendChild(el('span', null, '日期没有记录，可以在下面补上'));
+    row.appendChild(t); root.appendChild(row);
+  }
+  var lab = el('label', null, '日期'); lab.setAttribute('for', 'popDate'); root.appendChild(lab);
+  var d = el('input'); d.type = 'date'; d.id = 'popDate'; d.value = (r && r.date) || today(); d.max = today(); root.appendChild(d);
+  var n = el('textarea'); n.id = 'popNote'; n.placeholder = '备注（可选），比如 和谁一起、看到了什么'; n.value = (r && r.note) || ''; root.appendChild(n);
+  var btns = el('div', 'btns');
+  var ok = el('button', 'btn primary', r ? '保存修改' : '打卡'); ok.type = 'button';
+  ok.addEventListener('click', function(){ checkIn(e, d.value, n.value); });
+  btns.appendChild(ok);
+  if(r){
+    var un = el('button', 'btn warn', '取消打卡'); un.type = 'button'; var armed = false;
+    un.addEventListener('click', function(){
+      if(!armed){ armed = true; un.textContent = '再点一次确认'; setTimeout(function(){ armed = false; un.textContent = '取消打卡'; }, 3000); return; }
+      delete REC[e.id]; saveRec(); afterChange(e); toast('已取消：' + e.name);
+    });
+    btns.appendChild(un);
+  }
+  root.appendChild(btns);
+  var links = el('div', 'links');
+  var a1 = el('a', null, '导航过去'); a1.href = 'https://www.google.com/maps/search/?api=1&query=' + e.center[0] + ',' + e.center[1]; a1.target = '_blank'; a1.rel = 'noopener';
+  var a2 = el('a', null, '在 OSM 查看'); a2.href = 'https://www.openstreetmap.org/' + e.osm; a2.target = '_blank'; a2.rel = 'noopener';
+  links.appendChild(a1); links.appendChild(a2); root.appendChild(links);
+  L.DomEvent.disableClickPropagation(root);
+  return root;
+}
+function checkIn(e, date, note){
+  var was = !!REC[e.id];
+  REC[e.id] = {date: date || null, note: (note || '').trim()};
+  saveRec(); afterChange(e);
+  toast((was ? '已更新：' : '打卡成功：') + e.name);
+}
+function afterChange(e){
+  restyle(e); renderProgress(); renderList(); renderMenu();
+  if(currentId === e.id && map.hasLayer(popup)) popup.setContent(popupNode(e));
+}
+
+// ---------- Progress ----------
+function countBy(test){ var t = 0, d = 0; DATA.entities.forEach(function(e){ if(test(e)){ t++; if(REC[e.id]) d++; } }); return [d, t]; }
+function inMuniFilter(e, f){
+  if(f === 'all') return true;
+  if(f === 'g:23') return e.munis.some(function(m){ return IS23[m]; });
+  if(f === 'g:tama') return e.munis.some(function(m){ return !IS23[m]; });
+  return e.munis.indexOf(f) >= 0;
+}
+function pgNode(label, dt){
+  var pg = el('div', 'pg'), row = el('div', 'row'), bar = el('div', 'bar'), fill = el('i');
+  row.appendChild(el('span', null, label)); var num = el('span'); num.appendChild(el('b', null, String(dt[0]))); num.appendChild(document.createTextNode(' / ' + dt[1])); row.appendChild(num);
+  fill.style.width = (dt[1] ? Math.max(dt[0] ? 1 : 0, dt[0] / dt[1] * 100) : 0).toFixed(1) + '%'; bar.appendChild(fill); pg.appendChild(row); pg.appendChild(bar);
+  return pg;
+}
+function renderProgress(){
+  var box = $('#progress'); box.textContent = '';
+  var f = filt.muni, sel = f === 'all' ? null : (f === 'g:23' ? '23区' : (f === 'g:tama' ? '多摩' : f));
+  box.appendChild(pgNode('全东京', countBy(function(){ return true; })));
+  if(sel) box.appendChild(pgNode(sel, countBy(function(e){ return inMuniFilter(e, f); })));
+  else {
+    box.appendChild(pgNode('23区', countBy(function(e){ return inMuniFilter(e, 'g:23'); })));
+    box.appendChild(pgNode('多摩', countBy(function(e){ return inMuniFilter(e, 'g:tama'); })));
+  }
+  box.classList.toggle('three', !sel);
+  var all = countBy(function(){ return true; });
+  $('#subtitle').textContent = '东京都 23区＋多摩　已打卡 ' + all[0] + ' 处（' + (all[1] ? (Math.round(all[0] / all[1] * 1000) / 10) : 0) + '%）';
+}
+
+// ---------- List ----------
+function normQ(s){ return (s || '').toLowerCase().replace(/\s+/g, '').split('').map(function(ch){ return ZH_JA[ch] || ch; }).join(''); }
+function normName(s){ return (s || '').replace(/\s+/g, '').replace(/^(東京都立|都立|国営|[^\s]{1,4}[区市町村]立|区立|市立)/, '').replace(/芦花/g, '蘆花'); }
+function filtered(){
+  var q = normQ(filt.q).replace(/芦/g, '蘆');
+  var arr = DATA.entities.filter(function(e){
+    if(!inMuniFilter(e, filt.muni)) return false;
+    if(filt.kind !== 'all' && e.kind !== filt.kind) return false;
+    if(filt.status === 'done' && !REC[e.id]) return false;
+    if(filt.status === 'todo' && REC[e.id]) return false;
+    if(q){ var hay = normQ(e.name + ' ' + e.alts.join(' ') + ' ' + e.munis.join(' ')).replace(/芦/g, '蘆'); if(hay.indexOf(q) < 0) return false; }
+    return true;
+  });
+  var s = filt.sort; if(s === 'dist' && !me) s = 'size';
+  var dist = s === 'dist' ? new Map(arr.map(function(e){ return [e.id, hav(me, e.center)]; })) : null;
+  arr.sort(function(a, b){
+    if(s === 'name') return a.name.localeCompare(b.name, 'ja');
+    if(s === 'dist') return dist.get(a.id) - dist.get(b.id);
+    if(s === 'recent'){ var ra = REC[a.id], rb = REC[b.id]; if(!!ra !== !!rb) return ra ? -1 : 1; return ((rb && rb.date) || '').localeCompare((ra && ra.date) || ''); }
+    return ((b.area || 0) + (b.len || 0) * 20) - ((a.area || 0) + (a.len || 0) * 20);
+  });
+  return arr;
+}
+function renderList(){
+  var arr = filtered(), ul = $('#list'); ul.textContent = '';
+  var done = arr.filter(function(e){ return REC[e.id]; }).length;
+  $('#sheetSummary').textContent = '列表 · ' + arr.length.toLocaleString() + ' 处，其中已打卡 ' + done + ' 处' + (isMobile() ? ($('#sheet').dataset.open === 'true' ? '　收起 ▾' : '　展开 ▴') : '');
+  if(!arr.length){ ul.appendChild(el('li', 'empty', '没有符合条件的地方，换个筛选试试')); return; }
+  var frag = document.createDocumentFragment();
+  arr.slice(0, listLimit).forEach(function(e){
+    var li = el('li'), b = el('button', 'item'); b.type = 'button'; b.dataset.id = e.id;
+    var r = REC[e.id];
+    b.appendChild(el('span', 'dot' + (e.kind === 'greenway' ? ' way' : '') + (r ? ' done' : '')));
+    var txt = el('span', 'txt'); txt.appendChild(el('strong', null, e.name));
+    var meta = KIND_LABEL[e.kind] + ' · ' + e.munis.join('/') + ' · ' + fmtSize(e).replace('全长', '').replace('约 ', '');
+    if(me) meta += ' · ' + fmtDist(hav(me, e.center));
+    txt.appendChild(el('small', null, meta)); b.appendChild(txt);
+    b.appendChild(el('span', 'when', r ? (r.date ? r.date.slice(2).replace(/-/g, '/') : '已打卡') : ''));
+    li.appendChild(b); frag.appendChild(li);
+  });
+  if(arr.length > listLimit){
+    var li = el('li', 'more'), mb = el('button', 'btn', '再显示 ' + Math.min(200, arr.length - listLimit) + ' 个（还有 ' + (arr.length - listLimit).toLocaleString() + ' 个）');
+    mb.type = 'button'; mb.id = 'moreBtn'; li.appendChild(mb); frag.appendChild(li);
+  }
+  ul.appendChild(frag);
+}
+$('#list').addEventListener('click', function(ev){
+  if(ev.target.closest('#moreBtn')){ listLimit += 200; var y = $('#list').scrollTop; renderList(); $('#list').scrollTop = y; return; }
+  var b = ev.target.closest('.item'); if(!b) return;
+  if(isMobile()) setSheet(false);
+  openEntity(b.dataset.id, true);
+});
+function setSheet(open){
+  var s = $('#sheet'); s.dataset.open = open ? 'true' : 'false'; $('#sheetToggle').setAttribute('aria-expanded', String(open));
+  if(DATA) renderList();
+}
+function resetList(){ listLimit = 200; $('#list').scrollTop = 0; if(DATA) renderList(); }
+$('#sheetToggle').addEventListener('click', function(){ setSheet($('#sheet').dataset.open !== 'true'); });
+var qTimer = null;
+$('#q').addEventListener('input', function(){ var v = this.value; clearTimeout(qTimer); qTimer = setTimeout(function(){ filt.q = v; resetList(); }, 150); });
+$('#q').addEventListener('focus', function(){ if(isMobile()) setSheet(true); });
+(function buildMuniSelect(){
+  var s = $('#fMuni'); s.textContent = '';
+  [['all', '全东京'], ['g:23', '23区全部'], ['g:tama', '多摩全部']].forEach(function(o){ var op = el('option', null, o[1]); op.value = o[0]; s.appendChild(op); });
+  [['23区', MUNIS_23], ['多摩', MUNIS_TAMA]].forEach(function(g){ var og = el('optgroup'); og.label = g[0]; g[1].forEach(function(m){ var op = el('option', null, m); op.value = m; og.appendChild(op); }); s.appendChild(og); });
+})();
+[['#fMuni', 'muni'], ['#fKind', 'kind'], ['#fStatus', 'status'], ['#fSort', 'sort']].forEach(function(p){
+  var s = $(p[0]); s.value = filt[p[1]]; if(s.value !== filt[p[1]]){ filt[p[1]] = 'all'; s.value = 'all'; }
+  s.addEventListener('change', function(){
+    if(p[1] === 'sort' && this.value === 'dist' && !me){ locate(true); }
+    filt[p[1]] = this.value; saveUi(); resetList();
+    if(p[1] === 'muni' && DATA){ renderProgress(); zoomToMuni(this.value); }
+    if(isMobile()) setSheet(true);
+  });
+});
+function zoomToMuni(f){
+  if(f === 'all') return;
+  var pts = []; DATA.entities.forEach(function(e){ if(inMuniFilter(e, f)) pts.push(e.center); });
+  if(pts.length) map.fitBounds(L.latLngBounds(pts), {padding:[24, 24], maxZoom:15});
+}
+
+// ---------- Location ----------
+function locate(fromSort){
+  if(!navigator.geolocation){ toast('这个浏览器不支持定位'); return; }
+  var btn = $('#locBtn'); btn.classList.add('busy');
+  navigator.geolocation.getCurrentPosition(function(p){
+    btn.classList.remove('busy');
+    me = [p.coords.latitude, p.coords.longitude];
+    if(!meMarker) meMarker = L.circleMarker(me, {radius:7, color:'#ffffff', weight:3, fillColor:C.me, fillOpacity:1, interactive:false, pane:'dots'}).addTo(map);
+    else { meMarker.setLatLng(me); meMarker.bringToFront(); }
+    if(!fromSort) map.flyTo(me, Math.max(map.getZoom(), 15), {duration:.6});
+    if(DATA){
+      var best = null;
+      DATA.entities.forEach(function(e){ if(REC[e.id]) return; var d = hav(me, e.center); if(!best || d < best.d) best = {e:e, d:d}; });
+      if(best) toast('离你最近的未打卡：' + best.e.name + '（' + fmtDist(best.d) + '）');
+      renderList();
+    }
+  }, function(err){
+    btn.classList.remove('busy');
+    if(fromSort){ $('#fSort').value = 'size'; filt.sort = 'size'; if(DATA) renderList(); }
+    toast(err.code === 1 ? '没有定位权限，请在浏览器设置里允许这个页面使用位置' : '暂时拿不到位置，稍后再试');
+  }, {enableHighAccuracy:true, timeout:15000, maximumAge:60000});
+}
+$('#locBtn').addEventListener('click', function(){ locate(false); });
+
+// ---------- Menu: per-municipality progress, refresh / export / import ----------
+function renderMenu(){
+  if(!DATA) return;
+  var c = {park:0, greenway:0, garden:0}; DATA.entities.forEach(function(e){ c[e.kind]++; });
+  $('#mData').textContent = '公园 ' + c.park.toLocaleString() + ' · 绿道 ' + c.greenway + ' · 庭园 ' + c.garden;
+  $('#mTime').textContent = new Date(DATA.fetchedAt).toLocaleString('zh-CN', {hour12:false});
+  $('#mRec').textContent = Object.keys(REC).length + ' 处';
+  var box = $('#muniList'); box.textContent = '';
+  var stats = {}; MUNIS.forEach(function(m){ stats[m] = [0, 0]; });
+  DATA.entities.forEach(function(e){ e.munis.forEach(function(m){ stats[m][1]++; if(REC[e.id]) stats[m][0]++; }); });
+  [['23区', MUNIS_23], ['多摩', MUNIS_TAMA]].forEach(function(g){
+    box.appendChild(el('h3', null, g[0]));
+    g[1].slice().sort(function(a, b){ var x = stats[a], y = stats[b]; return (y[1] ? y[0]/y[1] : 0) - (x[1] ? x[0]/x[1] : 0) || y[0] - x[0]; }).forEach(function(m){
+      var b = el('button', 'muni-row'); b.type = 'button'; b.dataset.m = m; b.appendChild(pgNode(m, stats[m])); box.appendChild(b);
+    });
+  });
+}
+$('#muniList').addEventListener('click', function(ev){
+  var b = ev.target.closest('.muni-row'); if(!b) return;
+  filt.muni = b.dataset.m; $('#fMuni').value = filt.muni; saveUi(); resetList(); renderProgress(); zoomToMuni(filt.muni);
+  $('#menu').hidden = true; if(isMobile()) setSheet(true);
+});
+$('#menuBtn').addEventListener('click', function(){ var m = $('#menu'); m.hidden = !m.hidden; this.setAttribute('aria-expanded', String(!m.hidden)); });
+map.on('click', function(){ $('#menu').hidden = true; $('#menuBtn').setAttribute('aria-expanded', 'false'); });
+$('#refreshBtn').addEventListener('click', function(){ $('#menu').hidden = true; loadData(true); });
+$('#exportBtn').addEventListener('click', function(){
+  var out = {app:'park-checkin-map', version:1, exportedAt:new Date().toISOString(), records:{}};
+  Object.keys(REC).forEach(function(id){ var e = BYID.get(id); out.records[id] = Object.assign({name: e ? e.name : id.split('|')[1]}, REC[id]); });
+  var blob = new Blob([JSON.stringify(out, null, 2)], {type:'application/json'});
+  var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = '公园打卡记录-' + today() + '.json';
+  document.body.appendChild(a); a.click(); setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+  toast('已导出 ' + Object.keys(REC).length + ' 条打卡记录');
+});
+$('#importBtn').addEventListener('click', function(){ $('#importFile').click(); });
+$('#importFile').addEventListener('change', function(){
+  var f = this.files && this.files[0]; if(!f) return; var input = this;
+  var rd = new FileReader();
+  rd.onload = function(){
+    try{
+      var j = JSON.parse(rd.result), recs = j.records || j, n = 0;
+      Object.keys(recs).forEach(function(id){ var r = recs[id]; if(r && typeof r === 'object'){ REC[id] = {date: r.date || null, note: r.note || ''}; n++; } });
+      if(DATA) migrateRecords();
+      saveRec(); if(DATA){ DATA.entities.forEach(restyle); renderProgress(); renderList(); renderMenu(); }
+      toast('已导入 ' + n + ' 条打卡记录');
+    }catch(e){ toast('这个文件读不出来，请选择之前导出的 JSON 文件'); }
+    input.value = '';
+  };
+  rd.readAsText(f);
+});
+
+// ---------- Footprint import (一生足迹 CSV: track + photo locations) ----------
+function parseFootprint(text, box){
+  var lines = text.split(/\r?\n/), ix = {};
+  lines[0].split(',').forEach(function(h, i){ ix[h.trim()] = i; });
+  if(ix.longitude == null || ix.latitude == null || ix.dataTime == null) throw new Error('bad-csv');
+  var out = [];
+  for(var i = 1; i < lines.length; i++){
+    var c = lines[i].split(','); if(c.length < 4) continue;
+    var lat = +c[ix.latitude], lon = +c[ix.longitude], t = +c[ix.dataTime];
+    if(!(lat > box[0] && lat < box[2] && lon > box[1] && lon < box[3]) || !t) continue;
+    var photo = (ix.locType != null && c[ix.locType].trim() === '0') || (ix.stepType != null && c[ix.stepType].trim() === '1');
+    var acc = ix.accuracy != null ? +c[ix.accuracy] : 0;
+    if(acc > 80) continue;
+    out.push({lat:lat, lon:lon, t:t, photo:photo});
+  }
+  return out;
+}
+function cleanFootprint(pts){
+  var seen = new Set(), u = [];
+  pts.sort(function(a, b){ return a.t - b.t; }).forEach(function(p){ var k = p.t + ',' + p.lat.toFixed(5) + ',' + p.lon.toFixed(5); if(!seen.has(k)){ seen.add(k); u.push(p); } });
+  var track = u.filter(function(p){ return !p.photo; }), keep = u.filter(function(p){ return p.photo; });
+  for(var i = 0; i < track.length; i++){
+    var p = track[i], sp = [];
+    [track[i-1], track[i+1]].forEach(function(q){ if(q){ var dt = Math.abs(q.t - p.t); if(dt > 0 && dt < 600) sp.push(hav([p.lat, p.lon], [q.lat, q.lon]) / dt); } });
+    if(sp.length && Math.min.apply(null, sp) > 7) continue; // trains and cars
+    keep.push(p);
+  }
+  return keep;
+}
+function distToPath(lat, lon, c){
+  var kx = 111320 * Math.cos(lat * Math.PI / 180), ky = 110540, best = Infinity;
+  for(var i = 1; i < c.length; i++){
+    var ax = (c[i-1][1]-lon)*kx, ay = (c[i-1][0]-lat)*ky, bx = (c[i][1]-lon)*kx, by = (c[i][0]-lat)*ky;
+    var dx = bx-ax, dy = by-ay, L2 = dx*dx + dy*dy, t = L2 ? Math.max(0, Math.min(1, -(ax*dx + ay*dy) / L2)) : 0;
+    var px = ax + t*dx, py = ay + t*dy, d = Math.sqrt(px*px + py*py); if(d < best) best = d;
+  }
+  return best;
+}
+function dayOf(t){ var d = new Date((t + 9 * 3600) * 1000); return d.toISOString().slice(0, 10); }
+function matchFootprint(pts){
+  var CELL = 0.002, grid = new Map();
+  pts.forEach(function(p){ var k = Math.floor(p.lat / CELL) + ',' + Math.floor(p.lon / CELL); var a = grid.get(k); if(!a){ a = []; grid.set(k, a); } a.push(p); });
+  function near(b){
+    var out = [];
+    for(var y = Math.floor(b[0] / CELL); y <= Math.floor(b[2] / CELL); y++) for(var x = Math.floor(b[1] / CELL); x <= Math.floor(b[3] / CELL); x++){ var a = grid.get(y + ',' + x); if(a) out.push.apply(out, a); }
+    return out;
+  }
+  var res = [];
+  DATA.entities.forEach(function(e){
+    var polys = e.geoms.filter(function(g){ return g.t === 'poly'; }), lines = e.geoms.filter(function(g){ return g.t === 'line'; });
+    var buf = e.kind === 'greenway' ? 20 : ((e.area || 0) < 3000 ? 25 : 15), pad = 0.0005;
+    var b = e.bb ? [e.bb[0]-pad, e.bb[1]-pad, e.bb[2]+pad, e.bb[3]+pad] : [e.center[0]-pad, e.center[1]-pad, e.center[0]+pad, e.center[1]+pad];
+    var cand = near(b); if(!cand.length) return;
+    var hits = cand.filter(function(p){
+      for(var i = 0; i < polys.length; i++){ if(inRing(p.lat, p.lon, polys[i].r) || distToPath(p.lat, p.lon, polys[i].r) < buf) return true; }
+      for(var j = 0; j < lines.length; j++){ if(distToPath(p.lat, p.lon, lines[j].c) < buf) return true; }
+      if(!e.geoms.length && hav([p.lat, p.lon], e.center) < 40) return true;
+      return false;
+    });
+    if(!hits.length) return;
+    var photos = hits.filter(function(p){ return p.photo; }).length, track = hits.length - photos, ok;
+    if(e.kind === 'greenway'){
+      var a = hits[0], spread = 0; hits.forEach(function(p){ var d = hav([a.lat, a.lon], [p.lat, p.lon]); if(d > spread) spread = d; });
+      ok = (track + photos * 2 >= 4) && spread >= 100;
+    } else ok = photos >= 1 || track >= 2;
+    if(!ok) return;
+    var days = new Set(); hits.forEach(function(p){ days.add(dayOf(p.t)); });
+    var ts = hits.map(function(p){ return p.t; }).sort(function(x, y){ return x - y; });
+    res.push({e:e, first:dayOf(ts[0]), last:dayOf(ts[ts.length-1]), days:days.size, photos:photos});
+  });
+  return res.sort(function(a, b){ return (!!REC[a.e.id] - !!REC[b.e.id]) || b.days - a.days || b.photos - a.photos; });
+}
+var fpResults = [];
+$('#fpBtn').addEventListener('click', function(){
+  if(!DATA){ toast('公园数据还没加载好，等地图出来再导入'); return; }
+  $('#fpFile').click();
+});
+$('#fpFile').addEventListener('change', function(){
+  var files = Array.prototype.slice.call(this.files || []), input = this; if(!files.length) return;
+  $('#menu').hidden = true;
+  showLoading('正在比对足迹', '在你的浏览器里读取 ' + files.length + ' 个文件，数据不会上传到任何地方。', false);
+  setTimeout(function(){
+    Promise.all(files.map(function(f){ return f.text(); })).then(function(texts){
+      var pts = [];
+      texts.forEach(function(t){ pts = pts.concat(parseFootprint(t, TOKYO_BBOX)); });
+      pts = cleanFootprint(pts);
+      fpResults = matchFootprint(pts);
+      $('#loading').hidden = true; input.value = '';
+      showFootprint(pts.length);
+    }).catch(function(err){
+      input.value = ''; $('#loading').hidden = true;
+      toast(err && err.message === 'bad-csv' ? '请选择一生足迹导出的 CSV 文件（backUpData 或 backUpPhotoData）' : '读取时出错了：' + (err && err.message ? err.message : err));
+    });
+  }, 50);
+});
+function showFootprint(nPts){
+  var ul = $('#fpList'); ul.textContent = '';
+  var fresh = fpResults.filter(function(r){ return !REC[r.e.id]; }).length;
+  $('#fpSummary').textContent = '东京范围内有 ' + nPts.toLocaleString() + ' 个步行足迹点和照片点，对上了 ' + fpResults.length + ' 处公园和绿道，其中 ' + fresh + ' 处还没打卡。打卡日期用第一次去的那天。';
+  if(!fpResults.length){ ul.appendChild(el('li', 'empty', '没有对上的地方')); }
+  fpResults.forEach(function(r, i){
+    var li = el('li'), lab = el('label'), cb = el('input'); cb.type = 'checkbox'; cb.id = 'fp' + i; cb.dataset.i = i;
+    var had = REC[r.e.id]; cb.checked = !had || !had.date;
+    lab.setAttribute('for', cb.id); lab.appendChild(cb);
+    var t = el('span'), s = el('strong', null, r.e.name);
+    if(had) s.appendChild(el('span', 'tag', had.date ? '已打卡' : '已打卡，补上日期'));
+    t.appendChild(s);
+    t.appendChild(el('small', null, KIND_LABEL[r.e.kind] + ' · ' + r.e.munis.join('/') + ' · 去过 ' + r.days + ' 天' + (r.photos ? ' · ' + r.photos + ' 张照片' : '') + ' · 首次 ' + r.first.replace(/-/g, '.') + (r.days > 1 ? ' · 最近 ' + r.last.replace(/-/g, '.') : '')));
+    lab.appendChild(t); li.appendChild(lab); ul.appendChild(li);
+  });
+  $('#fpPanel').hidden = false; $('#fpList').scrollTop = 0; fpCount();
+}
+function fpCount(){ var n = document.querySelectorAll('#fpList input:checked').length; $('#fpApply').textContent = n ? '打卡选中的 ' + n + ' 处' : '没有选中'; $('#fpApply').disabled = !n; }
+$('#fpList').addEventListener('change', fpCount);
+$('#fpAll').addEventListener('click', function(){ document.querySelectorAll('#fpList input').forEach(function(c){ c.checked = true; }); fpCount(); });
+$('#fpNone').addEventListener('click', function(){ document.querySelectorAll('#fpList input').forEach(function(c){ c.checked = false; }); fpCount(); });
+$('#fpCancel').addEventListener('click', function(){ $('#fpPanel').hidden = true; });
+$('#fpApply').addEventListener('click', function(){
+  var n = 0;
+  document.querySelectorAll('#fpList input').forEach(function(c){
+    if(!c.checked) return; var r = fpResults[+c.dataset.i], old = REC[r.e.id];
+    var note = '足迹识别：去过 ' + r.days + ' 天' + (r.photos ? '，' + r.photos + ' 张照片' : '');
+    REC[r.e.id] = {date: (old && old.date) || r.first, note: old && old.note && old.note !== '之前去过' ? old.note : note}; n++;
+  });
+  saveRec(); DATA.entities.forEach(restyle); renderProgress(); renderList(); renderMenu();
+  $('#fpPanel').hidden = true; toast('已根据足迹打卡 ' + n + ' 处');
+});
+
+// ---------- Records from older versions; seed visited parks ----------
+// Old ids were "p|名前"; if that name now exists in several places, attach the record to the one in 世田谷/杉並.
+function migrateRecords(){
+  var moved = 0;
+  Object.keys(REC).forEach(function(id){
+    if(BYID.has(id)) return;
+    var parts = id.split('|'); if(parts.length !== 2) return;
+    var kind = parts[0] === 'g' ? 'greenway' : null, name = parts[1];
+    var cand = DATA.entities.filter(function(e){ return e.name === name && (kind ? e.kind === kind : e.kind !== 'greenway'); });
+    if(!cand.length) return;
+    var pick = cand.filter(function(e){ return e.munis.indexOf('世田谷区') >= 0 || e.munis.indexOf('杉並区') >= 0; })[0] || cand[0];
+    if(!REC[pick.id]){ REC[pick.id] = REC[id]; delete REC[id]; moved++; }
+  });
+  if(moved) saveRec();
+}
+function seed(){
+  var done = S.get(K.seed, []) || [], want = SEED_NAMES.filter(function(n){ return done.indexOf(n) < 0; });
+  if(!want.length) return;
+  var hit = [];
+  DATA.entities.forEach(function(e){
+    var names = [e.name].concat(e.alts).map(normName);
+    want.forEach(function(sn){
+      if(names.indexOf(normName(sn)) >= 0){ if(!REC[e.id]) REC[e.id] = {date:null, note:'之前去过'}; if(hit.indexOf(sn) < 0) hit.push(sn); }
+    });
+  });
+  if(hit.length){ saveRec(); S.set(K.seed, done.concat(hit)); toast('已把之前去过的 ' + hit.length + ' 个地方标为打卡'); }
+}
+
+// ---------- Load ----------
+function showLoading(title, text, error){
+  $('#loading').hidden = false; $('#loadTitle').textContent = title; $('#loadText').textContent = text;
+  $('#spin').hidden = !!error; $('#loadBtns').hidden = !error; $('#loadBar').hidden = true;
+}
+function setLoadProgress(done, total, title){
+  $('#loadTitle').textContent = title; $('#loadBar').hidden = false; $('#loadBar').firstElementChild.style.width = (done / total * 100).toFixed(0) + '%';
+}
+$('#retryBtn').addEventListener('click', function(){ loadData(true, true); });
+function applyData(data, fit){
+  DATA = data; BYID = new Map(); data.entities.forEach(function(e){ BYID.set(e.id, e); });
+  migrateRecords(); seed(); drawAll(); renderProgress(); renderList(); renderMenu();
+  if(fit) map.fitBounds([[35.55, 139.0], [35.85, 139.92]]);
+}
+var loading = false;
+function loadData(force, resume){
+  if(loading) return; loading = true;
+  var cachedP = force ? Promise.resolve(null) : DB.get('data');
+  cachedP.then(function(cached){
+    if(cached && cached.v === DATA_VER && cached.entities && cached.entities.length){ loading = false; applyData(cached, false); return; }
+    var steps = [{key:'chunk:boundary', label:'东京各区市边界', q:boundaryQuery()}].concat(CHUNKS.map(function(c, i){ return {key:'chunk:' + i, label:c.label, q:chunkQuery(c.b)}; }));
+    showLoading('正在下载全东京的公园数据', '分 ' + steps.length + ' 次从 OpenStreetMap 下载，一共大约 3 到 8 分钟，只需要下载这一次。中途断了的话，点重试会从断开的地方继续。');
+    var results = [], i = 0;
+    function step(){
+      if(i >= steps.length) return Promise.resolve();
+      var s = steps[i], n = i + 1;
+      setLoadProgress(i, steps.length, '正在下载 ' + n + '/' + steps.length + '：' + s.label);
+      return (force && !resume ? Promise.resolve(undefined) : DB.get(s.key)).then(function(saved){
+        if(saved) return saved;
+        return overpass(s.q).then(function(j){ var els = j.elements || []; return DB.set(s.key, els).then(function(){ return els; }); });
+      }).then(function(els){ results.push(els); i++; return step(); });
+    }
+    if(force && !resume) Promise.all(steps.map(function(s){ return DB.del(s.key); }));
+    step().then(function(){
+      setLoadProgress(steps.length, steps.length, '正在整理数据');
+      return new Promise(function(r){ setTimeout(r, 30); });
+    }).then(function(){
+      var data = processData(results[0], results.slice(1));
+      if(!data.entities.length) throw new Error('数据服务器没有返回任何公园');
+      return DB.set('data', data).then(function(ok){
+        steps.forEach(function(s){ DB.del(s.key); });
+        $('#loading').hidden = true; loading = false;
+        applyData(data, !DATA && !view);
+        toast('已加载全东京 ' + data.entities.length.toLocaleString() + ' 处公园和绿道' + (ok ? '' : '，但浏览器存储不够，下次打开需要重新下载'));
+      });
+    }).catch(function(err){
+      loading = false;
+      if(DATA){ $('#loading').hidden = true; toast('更新失败，先继续用之前的数据'); return; }
+      showLoading('下载到第 ' + (i + 1) + ' 步时断了', '可能是网络不稳定，或者 OpenStreetMap 的数据服务器正忙。已经下载好的部分都保存了，过一会儿点重试，会从断开的地方继续。（' + (err && err.message ? err.message : err) + '）', true);
+    });
+  });
+}
+
+if(window.matchMedia){
+  var mq = window.matchMedia('(prefers-color-scheme: dark)');
+  var onTheme = function(){ readColors(); if(DATA) drawAll(); };
+  if(mq.addEventListener) mq.addEventListener('change', onTheme); else if(mq.addListener) mq.addListener(onTheme);
+}
+window.addEventListener('resize', function(){ if(DATA) renderList(); });
+
+loadData(false, true);
+})();
+</script>
+</body>
+</html>
