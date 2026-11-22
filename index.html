@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="公园打卡">
 <meta name="theme-color" content="#2f6b4f">
@@ -21,7 +22,7 @@
   --accent:#2f6b4f; --accent-fg:#ffffff; --visited:#2e8b57; --todo:#7b857e; --way:#4a7fa8; --ward:#a05a37;
   --stamp:#c4472f; --me:#2a6fdb; --shadow:0 6px 24px rgba(20,32,26,.16);
   --font:"Hiragino Sans","PingFang SC","Noto Sans JP","Noto Sans SC","Microsoft YaHei",system-ui,sans-serif;
-  --peek:142px;
+  --peek:58px;
 }
 @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
   --bg:#111612; --surface:#19201b; --surface-2:#222b25; --fg:#e5ebe6; --muted:#9ba89f; --line:#2f3933;
@@ -62,7 +63,8 @@ button{cursor:pointer}
 #map{position:absolute;inset:0 0 var(--peek) 0;z-index:0;background:var(--surface-2)}
 .leaflet-container{font-family:var(--font)}
 .tiles-dark{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.9)}
-.fab{position:absolute;z-index:450;right:calc(10px + env(safe-area-inset-right,0px));bottom:calc(var(--peek) + 96px);
+.fabs{position:absolute;z-index:450;right:calc(10px + env(safe-area-inset-right,0px));bottom:calc(var(--peek) + 92px);display:flex;flex-direction:column;gap:8px}
+.fab{
   width:40px;height:40px;border-radius:10px;border:1px solid var(--line);background:var(--surface);box-shadow:var(--shadow);display:grid;place-items:center}
 .fab svg{width:20px;height:20px;stroke:var(--fg)}
 .fab.busy svg{animation:spin 1s linear infinite}
@@ -157,8 +159,41 @@ button{cursor:pointer}
   padding:8px 14px;border-radius:20px;font-size:13px;max-width:calc(100% - 32px);box-shadow:var(--shadow)}
 .leaflet-control-layers{background:var(--surface);color:var(--fg);border-color:var(--line)!important}
 .leaflet-bar a{background:var(--surface);color:var(--fg);border-color:var(--line)}
-.leaflet-control-attribution{background:color-mix(in srgb,var(--surface) 80%,transparent)!important;color:var(--muted)}
-.leaflet-control-attribution a{color:var(--accent)}
+/* Leaflet's own attribution box grows to three lines with vector maps; a compact one replaces it */
+.leaflet-control-attribution{display:none!important}
+.attr{display:flex;align-items:flex-start;gap:4px;max-width:min(78vw,420px);margin:0 0 6px 6px!important;padding:2px 7px 2px 3px;border-radius:10px;
+  background:color-mix(in srgb,var(--surface) 82%,transparent);color:var(--muted);font-size:10px;line-height:16px}
+.attr button{flex:none;width:16px;height:16px;border-radius:50%;border:1px solid var(--muted);background:none;color:var(--muted);font:600 10px/14px Georgia,serif;padding:0}
+.attr .t{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.attr.open .t{white-space:normal}
+.attr a{color:var(--accent)}
+/* Mobile: tighter header; search and filters only when the list is open */
+@media (max-width:899px){
+  .topbar{padding-top:calc(env(safe-area-inset-top,0px) + 6px);padding-bottom:7px;gap:5px 10px}
+  .seal{width:28px;height:28px;font-size:14px;border-width:1.5px}
+  .brand{gap:8px}
+  .brand h1{font-size:15px}
+  .brand p{font-size:11px}
+  .icon-btn{height:30px;padding:0 10px;font-size:12px}
+  .pg .row{font-size:11px}
+  .bar{height:4px;margin-top:2px}
+  .sheet[data-open="false"] .controls{display:none}
+  .handle{padding-top:6px;padding-bottom:8px}
+}
+/* Full-screen map */
+.mini{display:none}
+body.immersive .topbar,body.immersive .sheet{display:none!important}
+body.immersive #map{inset:0!important}
+body.immersive .fabs{bottom:calc(env(safe-area-inset-bottom,0px) + 96px)}
+body.immersive .leaflet-top{top:env(safe-area-inset-top,0px)}
+body.immersive .leaflet-bottom{bottom:env(safe-area-inset-bottom,0px)}
+body.immersive .mini{display:flex;position:absolute;z-index:460;left:calc(10px + env(safe-area-inset-left,0px));top:calc(10px + env(safe-area-inset-top,0px));
+  align-items:center;gap:8px;padding:6px 10px;border-radius:18px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow);font-size:12px;font-variant-numeric:tabular-nums}
+.mini .seal{width:20px;height:20px;font-size:11px;border-width:1.5px;border-radius:4px}
+.mini b{font-weight:600}
+body.immersive .toast{top:calc(env(safe-area-inset-top,0px) + 56px)}
+.fab.on{background:var(--accent)}
+.fab.on svg{stroke:var(--accent-fg)}
 
 @media (min-width:900px){
   :root{--peek:0px}
@@ -169,7 +204,8 @@ button{cursor:pointer}
   .handle{pointer-events:none;padding-top:12px}
   .grip{display:none}
   #map{left:380px}
-  .fab{bottom:96px}
+  .fabs{bottom:96px}
+  body.immersive #map{left:0!important}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
@@ -187,9 +223,15 @@ button{cursor:pointer}
 
   <div class="mapwrap">
     <div id="map" aria-label="公园地图"></div>
-    <button class="fab" id="locBtn" aria-label="定位到我的位置" title="我的位置">
-      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.2" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
-    </button>
+    <div class="mini" id="mini" aria-live="polite"><span class="seal" aria-hidden="true">園</span><span id="miniText">—</span></div>
+    <div class="fabs">
+      <button class="fab" id="fsBtn" aria-label="全屏地图" aria-pressed="false" title="全屏地图">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+      </button>
+      <button class="fab" id="locBtn" aria-label="定位到我的位置" title="我的位置">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.2" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+      </button>
+    </div>
 
     <section class="sheet" id="sheet" data-open="false" aria-label="公园列表">
       <button class="handle" id="sheetToggle" aria-expanded="false"><span class="grip"></span><span class="sum" id="sheetSummary">列表</span></button>
@@ -528,7 +570,7 @@ function processData(boundaryEls, chunkEls){
 
 // ---------- Map ----------
 var map = L.map('map', {zoomControl:false, preferCanvas:true});
-map.attributionControl.setPrefix('<a href="https://leafletjs.com">Leaflet</a>');
+map.attributionControl.setPrefix(false);
 L.control.zoom({position:'bottomright', zoomInTitle:'放大', zoomOutTitle:'缩小'}).addTo(map);
 // Base maps. Vector maps (drawn by MapLibre at the screen's real resolution) stay sharp on phones;
 // the 地理院 raster tiles are 256px images and look soft on Retina screens, so they are only a fallback.
@@ -572,6 +614,30 @@ var baseName = S.get(K.base, null);
 if(!bases[baseName]) baseName = darkPref ? '深色' : '浅色';
 bases[baseName].addTo(map);
 L.control.layers(bases, null, {position:'topright'}).addTo(map);
+// Compact attribution: short credit always visible, tap ⓘ for the full line.
+var OSM_LINK = '<a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
+var CREDITS = {
+  ofm:  {short:'© ' + OSM_LINK + ' · OpenFreeMap', full:'底图 <a href="https://openfreemap.org">OpenFreeMap</a> © <a href="https://www.openmaptiles.org/">OpenMapTiles</a> © ' + OSM_LINK + ' 贡献者'},
+  gsiv: {short:'© 国土地理院 · ' + OSM_LINK, full:'底图 <a href="https://maps.gsi.go.jp/development/ichiran.html">国土地理院 地理院地図Vector</a>'},
+  gsir: {short:'© 国土地理院 · ' + OSM_LINK, full:'底图 <a href="https://maps.gsi.go.jp/development/ichiran.html">地理院タイル</a>'}
+};
+function creditKey(name){ return /地理院（|航拍/.test(name) || !hasGL ? 'gsir' : (name === '地理院' ? 'gsiv' : 'ofm'); }
+var attrCtl = L.control({position:'bottomleft'});
+attrCtl.onAdd = function(){
+  var d = L.DomUtil.create('div', 'attr leaflet-control');
+  var btn = L.DomUtil.create('button', '', d); btn.type = 'button'; btn.textContent = 'i'; btn.setAttribute('aria-label', '地图数据来源');
+  L.DomUtil.create('span', 't', d);
+  L.DomEvent.disableClickPropagation(d);
+  btn.addEventListener('click', function(){ d.classList.toggle('open'); setCredit(); });
+  return d;
+};
+attrCtl.addTo(map);
+function setCredit(){
+  var d = attrCtl.getContainer(), c = CREDITS[creditKey(baseName)];
+  d.querySelector('.t').innerHTML = d.classList.contains('open') ? c.full + ' · 公园数据 © ' + OSM_LINK + ' 贡献者' : c.short;
+}
+setCredit();
+map.on('baselayerchange', function(e){ baseName = e.name; setCredit(); });
 map.on('baselayerchange', function(e){ S.set(K.base, e.name); });
 map.createPane('shapes').style.zIndex = 410;
 map.createPane('dots').style.zIndex = 420;
@@ -719,7 +785,9 @@ function renderProgress(){
   }
   box.classList.toggle('three', !sel);
   var all = countBy(function(){ return true; });
-  $('#subtitle').textContent = '东京都 23区＋多摩　已打卡 ' + all[0] + ' 处（' + (all[1] ? (Math.round(all[0] / all[1] * 1000) / 10) : 0) + '%）';
+  var pct = all[1] ? (Math.round(all[0] / all[1] * 1000) / 10) : 0;
+  $('#subtitle').textContent = '东京 23区＋多摩 · 已打卡 ' + all[0] + ' 处 · ' + pct + '%';
+  $('#miniText').innerHTML = ''; $('#miniText').appendChild(el('b', null, String(all[0]))); $('#miniText').appendChild(document.createTextNode(' / ' + all[1] + ' · ' + pct + '%'));
 }
 
 // ---------- List ----------
@@ -826,6 +894,17 @@ function locate(fromSort){
   }, {enableHighAccuracy:true, timeout:15000, maximumAge:60000});
 }
 $('#locBtn').addEventListener('click', function(){ locate(false); });
+
+// ---------- Full-screen map ----------
+function setImmersive(on){
+  document.body.classList.toggle('immersive', on);
+  var b = $('#fsBtn'); b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); b.setAttribute('aria-label', on ? '退出全屏' : '全屏地图');
+  if(on){ $('#menu').hidden = true; }
+  try{ sessionStorage.setItem('tpm.immersive', on ? '1' : ''); }catch(e){}
+  setTimeout(function(){ map.invalidateSize(); refreshView(); }, 30);
+}
+$('#fsBtn').addEventListener('click', function(){ setImmersive(!document.body.classList.contains('immersive')); });
+try{ if(sessionStorage.getItem('tpm.immersive')) setImmersive(true); }catch(e){}
 
 // ---------- Menu: per-municipality progress, refresh / export / import ----------
 function renderMenu(){
