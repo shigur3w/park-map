@@ -10,6 +10,10 @@
 <title>公园打卡地图</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.4/leaflet-maplibre-gl.js"></script>
+<script src="https://unpkg.com/pmtiles@4.4.1/dist/pmtiles.js"></script>
 <style>
 /* Layout: full-screen map; header on top; list as a bottom sheet on phones, a left panel on wide screens. */
 :root{
@@ -526,19 +530,46 @@ function processData(boundaryEls, chunkEls){
 var map = L.map('map', {zoomControl:false, preferCanvas:true});
 map.attributionControl.setPrefix('<a href="https://leafletjs.com">Leaflet</a>');
 L.control.zoom({position:'bottomright', zoomInTitle:'放大', zoomOutTitle:'缩小'}).addTo(map);
+// Base maps. Vector maps (drawn by MapLibre at the screen's real resolution) stay sharp on phones;
+// the 地理院 raster tiles are 256px images and look soft on Retina screens, so they are only a fallback.
 var gsiAttr = '<a href="https://maps.gsi.go.jp/development/ichiran.html">地理院タイル</a>';
 var gsi = function(id, ext, extra){ return L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/' + id + '/{z}/{x}/{y}.' + ext, Object.assign({maxNativeZoom:18, maxZoom:20, attribution:gsiAttr}, extra || {})); };
-var bases = {
-  '淡色': gsi('pale', 'png'),
+var hasGL = false;
+try{ var cv = document.createElement('canvas'); hasGL = !!(window.maplibregl && L.maplibreGL && (cv.getContext('webgl2') || cv.getContext('webgl'))); }catch(e){ hasGL = false; }
+if(hasGL && window.pmtiles){ try{ var pmProto = new pmtiles.Protocol(); maplibregl.addProtocol('pmtiles', pmProto.tile); }catch(e){} }
+var ofmAttr = '<a href="https://openfreemap.org">OpenFreeMap</a> &copy; <a href="https://www.openmaptiles.org/">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
+function jaLabels(style){ // OpenFreeMap labels default to Latin names; show Japanese names instead
+  (style.layers || []).forEach(function(l){
+    var tf = l.layout && l.layout['text-field'];
+    if(tf && JSON.stringify(tf).indexOf('name') >= 0) l.layout['text-field'] = ['coalesce', ['get', 'name:ja'], ['get', 'name'], ['get', 'name_en']];
+  });
+  return style;
+}
+function glBase(url, attr, fixLabels){
+  var lyr = L.maplibreGL({style:url, attribution:attr, maxZoom:20});
+  if(fixLabels) lyr.on('add', function(){
+    var m = lyr.getMaplibreMap && lyr.getMaplibreMap();
+    if(m && !lyr._jaFixed){ lyr._jaFixed = true; m.setStyle(url, {transformStyle:function(prev, next){ return jaLabels(next); }}); }
+  });
+  return lyr;
+}
+var bases = hasGL ? {
+  '浅色': glBase('https://tiles.openfreemap.org/styles/positron', ofmAttr, true),
+  '彩色': glBase('https://tiles.openfreemap.org/styles/liberty', ofmAttr, true),
+  '深色': glBase('https://tiles.openfreemap.org/styles/dark', ofmAttr, true),
+  '地理院': glBase('https://gsi-cyberjapan.github.io/optimal_bvmap/style/std.json', '<a href="https://maps.gsi.go.jp/development/ichiran.html">地理院地図Vector</a>', false),
+  '地理院（图片）': gsi('pale', 'png'),
+  '航拍': gsi('seamlessphoto', 'jpg')
+} : {
+  '浅色': gsi('pale', 'png'),
   '标准': gsi('std', 'png'),
   '深色': gsi('pale', 'png', {className:'tiles-dark'}),
-  '航拍': gsi('seamlessphoto', 'jpg'),
-  'OSM': L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19, attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> 贡献者'})
+  '航拍': gsi('seamlessphoto', 'jpg')
 };
 map.attributionControl.addAttribution('公园数据 &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> 贡献者');
 var darkPref = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
 var baseName = S.get(K.base, null);
-if(!bases[baseName]) baseName = darkPref ? '深色' : '淡色';
+if(!bases[baseName]) baseName = darkPref ? '深色' : '浅色';
 bases[baseName].addTo(map);
 L.control.layers(bases, null, {position:'topright'}).addTo(map);
 map.on('baselayerchange', function(e){ S.set(K.base, e.name); });
