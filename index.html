@@ -54,10 +54,24 @@ button{cursor:pointer}
 .brand h1{margin:0;font-size:17px;line-height:1.2;letter-spacing:.02em}
 .brand p{margin:0;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
 .actions{grid-area:menu;display:flex;gap:8px;align-items:center}
-.regions{display:flex;height:36px;border:1px solid var(--line);border-radius:10px;overflow:hidden}
-.regions button{border:0;background:var(--surface-2);padding:0 11px;font-size:13px}
-.regions button+button{border-left:1px solid var(--line)}
-.regions button[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg);font-weight:600}
+.city-btn{display:inline-flex;align-items:center;gap:4px;font-weight:600}
+.city-btn svg{width:12px;height:12px}
+/* City picker */
+#cityPanel{position:fixed;z-index:1000;padding:calc(env(safe-area-inset-top,0px) + 12px) max(12px,env(safe-area-inset-right,0px)) calc(env(safe-area-inset-bottom,0px) + 12px) max(12px,env(safe-area-inset-left,0px))}
+.city-card{width:min(420px,100%);max-height:100%;display:flex;flex-direction:column;overflow:hidden}
+.city-card .head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.city-card .head h2{margin:0}
+.city-card .x{border:0;background:none;font-size:22px;line-height:1;color:var(--muted);padding:4px 6px}
+.city-list{overflow-y:auto;min-height:0}
+.city-list h3{margin:12px 0 4px;font-size:12px;color:var(--muted);font-weight:600;letter-spacing:.04em}
+.city-row{display:grid;grid-template-columns:1fr auto;gap:2px 12px;width:100%;text-align:left;border:1px solid var(--line);background:var(--surface);border-radius:12px;padding:10px 12px;margin-bottom:8px}
+.city-row:hover{border-color:var(--accent)}
+.city-row[aria-current="true"]{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,var(--surface))}
+.city-row strong{font-size:15px}
+.city-row small{grid-column:1;color:var(--muted);font-size:12px}
+.city-row .cnt{grid-row:1 / span 2;grid-column:2;align-self:center;text-align:right;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.city-row .cnt b{display:block;font-size:15px;color:var(--fg)}
+.city-row .bar{grid-column:1 / span 2;margin-top:6px}
 .icon-btn{border:1px solid var(--line);background:var(--surface-2);border-radius:10px;height:36px;padding:0 12px;font-size:13px}
 .progress{grid-area:prog;display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .pg{min-width:0}
@@ -191,8 +205,6 @@ button{cursor:pointer}
   .brand h1{font-size:15px}
   .brand p{font-size:11px}
   .icon-btn{height:30px;padding:0 10px;font-size:12px}
-  .regions{height:30px}
-  .regions button{padding:0 9px;font-size:12px}
   .actions{gap:6px}
   .pg .row{font-size:11px}
   .bar{height:4px;margin-top:2px}
@@ -238,7 +250,7 @@ body.immersive .toast{top:calc(env(safe-area-inset-top,0px) + 56px)}
     </div>
     <div class="progress" id="progress"></div>
     <div class="actions">
-      <div class="regions" role="group" aria-label="城市"><button type="button" data-r="tokyo">东京</button><button type="button" data-r="ningbo">宁波</button></div>
+      <button class="icon-btn city-btn" id="cityBtn" type="button" aria-haspopup="dialog" aria-controls="cityPanel"><span id="cityName">东京</span><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <button class="icon-btn" id="menuBtn" aria-expanded="false" aria-controls="menu"><span class="sdot" id="syncDot" hidden></span>数据</button>
     </div>
   </header>
@@ -304,6 +316,12 @@ body.immersive .toast{top:calc(env(safe-area-inset-top,0px) + 56px)}
       </div>
     </div>
 
+    <div class="overlay" id="cityPanel" hidden>
+      <div class="card city-card" role="dialog" aria-modal="true" aria-labelledby="cityTitle">
+        <div class="head"><h2 id="cityTitle">选择城市</h2><button type="button" class="x" id="cityClose" aria-label="关闭">×</button></div>
+        <div class="city-list" id="cityList"></div>
+      </div>
+    </div>
     <div class="overlay" id="fpPanel" hidden>
       <div class="card fp-card" role="dialog" aria-labelledby="fpTitle">
         <h2 id="fpTitle">足迹比对结果</h2>
@@ -962,17 +980,18 @@ $('#fpApply').addEventListener('click', function(){
 
 // ---------- Records from older versions; seed visited parks ----------
 // Old ids were "p|名前"; if that name now exists in several places, attach the record to the one in 世田谷/杉並.
+function regionOfId(id){ var r = Object.keys(REGIONS).filter(function(k){ return REGIONS[k].idPrefix && id.indexOf(REGIONS[k].idPrefix) === 0; })[0]; return r || 'tokyo'; }
+// Old ids were "前缀p|名前"; when that name later exists in several places, attach the record to the one in the city's core districts.
 function migrateRecords(){
-  if(REGION.id !== 'tokyo') return;
-  var moved = 0;
+  var moved = 0, pre = REGION.idPrefix, prefer = REGION.prefer || [];
   Object.keys(REC).forEach(function(id){
-    if(BYID.has(id)) return;
-    var parts = id.split('|'); if(parts.length !== 2) return;
+    if(BYID.has(id) || regionOfId(id) !== REGION.id) return;
+    var parts = id.slice(pre.length).split('|'); if(parts.length !== 2 || parts[0] === 'u') return;
     var kind = parts[0] === 'g' ? 'greenway' : null, name = parts[1];
     var cand = DATA.entities.filter(function(e){ return e.name === name && (kind ? e.kind === kind : e.kind !== 'greenway'); });
     if(!cand.length) return;
-    var pick = cand.filter(function(e){ return e.munis.indexOf('世田谷区') >= 0 || e.munis.indexOf('杉並区') >= 0; })[0] || cand[0];
-    if(!REC[pick.id]){ REC[pick.id] = REC[id]; delete REC[id]; DIRTY[pick.id] = 1; moved++; }
+    var pick = cand.filter(function(e){ return e.munis.some(function(m){ return prefer.indexOf(m) >= 0; }); })[0] || cand[0];
+    if(!REC[pick.id]){ REC[pick.id] = REC[id]; delete REC[id]; TOMB[id] = Date.now(); DIRTY[id] = 1; DIRTY[pick.id] = 1; moved++; }
   });
   if(moved) saveRec();
 }
@@ -1204,7 +1223,7 @@ window.addEventListener('online', function(){ if(user) syncNow(false); });
 setSyncUi();
 
 // ---------- City switch (东京 / 宁波) ----------
-function markRegionButtons(){ document.querySelectorAll('.regions button').forEach(function(b){ b.setAttribute('aria-pressed', String(b.dataset.r === REGION.id)); }); }
+function markRegionButtons(){ $('#cityName').textContent = REGION.label; }
 function useBase(name){ if(!bases[name] || name === baseName) return; map.removeLayer(bases[baseName]); baseName = name; bases[name].addTo(map); setCredit(); }
 function fitBaseToRegion(){ // 地理院 maps only cover Japan
   if(REGION.id !== 'tokyo'){ if(/地理院|航拍/.test(baseName) || (!hasGL && baseName !== 'OSM')) useBase(hasGL ? (darkPref ? '深色' : '浅色') : 'OSM'); }
@@ -1219,12 +1238,47 @@ function switchRegion(id){
   ui = S.get(rk(K.ui), {}) || {}; filt.muni = ui.muni || 'all'; filt.q = ''; $('#q').value = ''; listLimit = 200;
   buildMuniSelect(); markRegionButtons();
   $('#progress').textContent = ''; $('#list').textContent = ''; $('#sheetSummary').textContent = '正在加载' + REGION.all + '的公园…'; $('#subtitle').textContent = REGION.full;
-  view = S.get(rk(K.view), null);
-  if(view && view.c && view.z) map.setView(view.c, view.z); else map.fitBounds(REGION.view);
+  view = {c:REGION.center, z:REGION.zoom}; map.setView(REGION.center, REGION.zoom); // always start at the city centre
   fitBaseToRegion();
   loadData(false);
 }
-document.querySelector('.regions').addEventListener('click', function(ev){ var b = ev.target.closest('button[data-r]'); if(b) switchRegion(b.dataset.r); });
+// City picker: one row per entry in REGIONS, grouped by country, with each city's check-in progress.
+var cityTotals = {};
+function cityCount(id){ return Object.keys(REC).filter(function(k){ return regionOfId(k) === id; }).length; }
+function renderCityList(){
+  var box = $('#cityList'); box.textContent = ''; var byCountry = {};
+  Object.keys(REGIONS).forEach(function(id){ var r = REGIONS[id]; (byCountry[r.country] = byCountry[r.country] || []).push(r); });
+  Object.keys(byCountry).forEach(function(c){
+    box.appendChild(el('h3', null, c));
+    byCountry[c].forEach(function(r){
+      var b = el('button', 'city-row'); b.type = 'button'; b.dataset.r = r.id; b.setAttribute('aria-current', String(r.id === REGION.id));
+      b.appendChild(el('strong', null, r.label)); b.appendChild(el('small', null, r.full));
+      var done = cityCount(r.id), tot = cityTotals[r.id], cnt = el('span', 'cnt');
+      cnt.appendChild(el('b', null, String(done))); cnt.appendChild(document.createTextNode(tot ? '/ ' + tot.toLocaleString() + ' 处' : '已打卡'));
+      b.appendChild(cnt);
+      var bar = el('div', 'bar'), fill = el('i'); fill.style.width = (tot ? Math.max(done ? 1 : 0, done / tot * 100) : 0).toFixed(1) + '%'; bar.appendChild(fill); b.appendChild(bar);
+      box.appendChild(b);
+    });
+  });
+}
+function openCityPicker(){
+  renderCityList(); $('#cityPanel').hidden = false; $('#menu').hidden = true;
+  Object.keys(REGIONS).forEach(function(id){
+    if(cityTotals[id]) return;
+    if(id === REGION.id && DATA){ cityTotals[id] = DATA.entities.length; return; }
+    fetch('data/' + REGIONS[id].versionFile, {cache:'no-cache'}).then(function(r){ return r.ok ? r.json() : null; }).then(function(v){ if(v && v.count){ cityTotals[id] = v.count; if(!$('#cityPanel').hidden) renderCityList(); } }).catch(function(){});
+  });
+  if(DATA) cityTotals[REGION.id] = DATA.entities.length;
+  renderCityList();
+}
+$('#cityBtn').addEventListener('click', openCityPicker);
+$('#cityClose').addEventListener('click', function(){ $('#cityPanel').hidden = true; });
+$('#cityPanel').addEventListener('click', function(ev){
+  if(ev.target === this){ this.hidden = true; return; }
+  var b = ev.target.closest('.city-row'); if(!b) return;
+  $('#cityPanel').hidden = true; if(b.dataset.r !== REGION.id) switchRegion(b.dataset.r);
+});
+document.addEventListener('keydown', function(ev){ if(ev.key === 'Escape') $('#cityPanel').hidden = true; });
 markRegionButtons(); fitBaseToRegion(); $('#subtitle').textContent = REGION.full;
 
 loadData(false);

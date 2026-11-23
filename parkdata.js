@@ -26,16 +26,29 @@ var MAIN = 'https://overpass-api.de/api/interpreter';
 var MAILRU = 'https://maps.mail.ru/osm/tools/overpass/api/interpreter';
 var ENDPOINTS = [MAIN, MAIN, 'https://overpass.kumi.systems/api/interpreter', MAILRU, MAIN, 'https://overpass.private.coffee/api/interpreter', MAILRU, MAIN];
 var DATA_VER = 3;
-// Ningbo: the six urban districts. Unnamed OSM parks are kept so people can name them when they check in.
-var NINGBO = ['海曙区','江北区','鄞州区','镇海区','北仑区','奉化区'];
-var NINGBO_BBOX = [29.40, 121.20, 30.10, 122.20];
+// Cities. Add a city by adding an entry here (and its file names); the page builds its picker from this list.
+// Chinese cities keep unnamed OSM parks so people can name them when they check in.
+var NINGBO_CORE = ['海曙区','江北区','鄞州区','镇海区','北仑区','奉化区'];
+var NINGBO_COUNTY = ['余姚市','慈溪市','宁海县','象山县'];
+var NINGBO = NINGBO_CORE.concat(NINGBO_COUNTY);
+var NINGBO_BBOX = [28.80, 120.85, 30.45, 122.30];
+var HZ_CORE = ['上城区','拱墅区','西湖区','滨江区'];
+var HZ_OUTER = ['萧山区','余杭区','临平区','钱塘区','富阳区','临安区'];
+var HANGZHOU = HZ_CORE.concat(HZ_OUTER);
+var HANGZHOU_BBOX = [29.70, 118.85, 30.60, 120.80];
+var CN_SKIP = '庄园|农场|度假村|山庄|酒店';
 var REGIONS = {
-  tokyo:  {id:'tokyo', label:'东京', full:'东京 23区＋多摩', all:'全东京', groups:[['23区', MUNIS_23], ['多摩', MUNIS_TAMA]], munis:MUNIS,
-           adminLevel:'7', bbox:TOKYO_BBOX, chunks:CHUNKS, wayRe:'緑道', unnamed:false, idPrefix:'', minEntities:3000,
-           file:'parks.json', versionFile:'version.json', dbKey:'data', view:[[35.55, 139.0], [35.85, 139.92]]},
-  ningbo: {id:'ningbo', label:'宁波', full:'宁波市区（6 区）', all:'宁波市区', groups:[['市区', NINGBO]], munis:NINGBO,
-           adminLevel:'6', bbox:NINGBO_BBOX, chunks:[{label:'宁波市区', b:NINGBO_BBOX}], wayRe:'绿道|綠道', unnamed:true, idPrefix:'nb|', minEntities:150,
-           exclude:'庄园|农场|度假村|山庄|酒店', file:'ningbo.json', versionFile:'ningbo-version.json', dbKey:'data:ningbo', view:[[29.70, 121.40], [30.00, 121.85]]}
+  tokyo:    {id:'tokyo', country:'日本', label:'东京', full:'东京 23区＋多摩', all:'全东京', groups:[['23区', MUNIS_23], ['多摩', MUNIS_TAMA]], munis:MUNIS,
+             adminLevel:'7', bbox:TOKYO_BBOX, chunks:CHUNKS, wayRe:'緑道', unnamed:false, idPrefix:'', minEntities:3000, prefer:['世田谷区','杉並区'],
+             file:'parks.json', versionFile:'version.json', dbKey:'data', view:[[35.55, 139.0], [35.85, 139.92]], center:[35.6896, 139.6917], zoom:11},
+  hangzhou: {id:'hangzhou', country:'中国', label:'杭州', full:'杭州市区（10 区）', all:'杭州市区', groups:[['主城区', HZ_CORE], ['其他城区', HZ_OUTER]], munis:HANGZHOU,
+             adminLevel:'6', bbox:HANGZHOU_BBOX, chunks:[{label:'临安・富阳西部', b:[29.70, 118.85, 30.60, 119.90]}, {label:'富阳・余杭・西湖', b:[29.70, 119.90, 30.60, 120.20]}, {label:'主城区・萧山・钱塘・临平', b:[29.70, 120.20, 30.60, 120.80]}],
+             wayRe:'绿道|綠道', unnamed:true, idPrefix:'hz|', minEntities:200, exclude:CN_SKIP, prefer:HZ_CORE,
+             file:'hangzhou.json', versionFile:'hangzhou-version.json', dbKey:'data:hangzhou', view:[[30.10, 119.95], [30.45, 120.45]], center:[30.2747, 120.1636], zoom:11},
+  ningbo:   {id:'ningbo', country:'中国', label:'宁波', full:'宁波全域（6 区 4 县市）', all:'宁波全域', groups:[['市区', NINGBO_CORE], ['下辖县市', NINGBO_COUNTY]], munis:NINGBO,
+             adminLevel:'6', bbox:NINGBO_BBOX, chunks:[{label:'余姚・慈溪', b:[29.80, 120.85, 30.45, 121.50]}, {label:'宁波市区', b:[29.40, 121.20, 30.10, 122.30]}, {label:'宁海・象山・奉化南部', b:[28.80, 121.10, 29.60, 122.30]}],
+             wayRe:'绿道|綠道', unnamed:true, idPrefix:'nb|', minEntities:200, exclude:CN_SKIP, prefer:NINGBO_CORE,
+             file:'ningbo.json', versionFile:'ningbo-version.json', dbKey:'data:ningbo', view:[[29.70, 121.40], [30.00, 121.85]], center:[29.8705, 121.5495], zoom:11}
 };
 // ---------- Geometry helpers ----------
 function r5(x){ return Math.round(x * 1e5) / 1e5; }
