@@ -14,6 +14,7 @@
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css">
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.4/leaflet-maplibre-gl.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js"></script>
 <script src="https://unpkg.com/pmtiles@4.4.1/dist/pmtiles.js"></script>
 <style>
 /* Layout: full-screen map; header on top; list as a bottom sheet on phones, a left panel on wide screens. */
@@ -130,6 +131,15 @@ button{cursor:pointer}
 .menu{position:absolute;z-index:800;top:8px;right:max(12px,env(safe-area-inset-right,0px));width:min(320px,calc(100% - 24px))}
 .menu .card{padding:16px;max-height:calc(100vh - 200px);overflow-y:auto}
 .menu h2.sub{margin:18px 0 6px;font-size:14px}
+.sync p{margin:0 0 8px}
+.sync input{width:100%;height:38px;border:1px solid var(--line);background:var(--surface-2);border-radius:9px;padding:0 10px;margin-bottom:8px}
+.row2{display:flex;gap:8px}
+.row2 .btn{flex:1;margin-top:0!important;width:auto!important}
+.sdot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:1px;background:var(--visited)}
+.sdot.pending{background:#d39b2a}
+.sdot.error{background:var(--stamp)}
+.sdot.busy{animation:pulse 1s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.3}}
 .muni-list h3{margin:12px 0 4px;font-size:12px;color:var(--muted);font-weight:600;letter-spacing:.04em}
 .muni-row{display:block;width:100%;border:0;background:none;padding:5px 0;text-align:left}
 .muni-row:hover .row span:first-child{color:var(--accent)}
@@ -218,7 +228,7 @@ body.immersive .toast{top:calc(env(safe-area-inset-top,0px) + 56px)}
       <div><h1>公园打卡</h1><p id="subtitle">东京都 23区＋多摩</p></div>
     </div>
     <div class="progress" id="progress"></div>
-    <button class="icon-btn" id="menuBtn" aria-expanded="false" aria-controls="menu">数据</button>
+    <button class="icon-btn" id="menuBtn" aria-expanded="false" aria-controls="menu"><span class="sdot" id="syncDot" hidden></span>数据</button>
   </header>
 
   <div class="mapwrap">
@@ -249,13 +259,28 @@ body.immersive .toast{top:calc(env(safe-area-inset-top,0px) + 56px)}
 
     <div class="menu" id="menu" hidden>
       <div class="card">
-        <h2>数据</h2>
+        <section class="sync">
+          <h2>云同步</h2>
+          <div id="syncOut">
+            <p>登录后，手机和电脑上的打卡记录会自动同步。</p>
+            <form id="authForm" novalidate>
+              <input id="authEmail" type="email" autocomplete="email" placeholder="邮箱" required>
+              <input id="authPw" type="password" autocomplete="current-password" placeholder="密码（至少 6 位）" minlength="6" required>
+              <div class="row2"><button class="btn primary" type="submit" id="loginBtn">登录</button><button class="btn" type="button" id="signupBtn">注册</button></div>
+            </form>
+          </div>
+          <div id="syncIn" hidden>
+            <p id="syncStatus">—</p>
+            <div class="row2"><button class="btn primary" type="button" id="syncNowBtn">立即同步</button><button class="btn" type="button" id="logoutBtn">退出登录</button></div>
+          </div>
+        </section>
+        <h2 class="sub">数据</h2>
         <dl>
           <dt>公园数据</dt><dd id="mData">—</dd>
           <dt>更新时间</dt><dd id="mTime">—</dd>
           <dt>已打卡</dt><dd id="mRec">—</dd>
         </dl>
-        <p>公园和绿道数据来自 OpenStreetMap，下载一次后保存在这个浏览器里。打卡记录也只存在这个浏览器，换设备前先导出。</p>
+        <p>公园和绿道数据来自 OpenStreetMap，下载一次后保存在这个浏览器里。没登录云同步时，打卡记录只存在这个浏览器。</p>
         <button class="btn" id="refreshBtn">重新下载公园数据</button>
         <button class="btn" id="exportBtn">导出打卡记录</button>
         <button class="btn" id="importBtn">导入打卡记录</button>
@@ -364,7 +389,9 @@ var listLimit = 200;
 function $(s){ return document.querySelector(s); }
 function el(tag, cls, text){ var n = document.createElement(tag); if(cls) n.className = cls; if(text != null) n.textContent = text; return n; }
 function today(){ var d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0,10); }
-function saveRec(){ if(!S.set(K.rec, REC)) toast('打卡记录没能保存到浏览器，请检查是否开了无痕模式'); }
+var TOMB = S.get('tpm.tomb', {}) || {}, DIRTY = S.get('tpm.dirty', {}) || {}; // deleted ids -> time; ids waiting for upload
+function saveRec(){ if(!S.set(K.rec, REC)) toast('打卡记录没能保存到浏览器，请检查是否开了无痕模式'); S.set('tpm.tomb', TOMB); S.set('tpm.dirty', DIRTY); }
+function touch(id){ DIRTY[id] = 1; if(REC[id]){ REC[id].u = Date.now(); delete TOMB[id]; } else TOMB[id] = Date.now(); if(window.syncSoon) window.syncSoon(); }
 function saveUi(){ S.set(K.ui, {muni:filt.muni, kind:filt.kind, status:filt.status, sort:filt.sort}); }
 function isMobile(){ return window.innerWidth < 900; }
 
@@ -737,7 +764,7 @@ function popupNode(e){
     var un = el('button', 'btn warn', '取消打卡'); un.type = 'button'; var armed = false;
     un.addEventListener('click', function(){
       if(!armed){ armed = true; un.textContent = '再点一次确认'; setTimeout(function(){ armed = false; un.textContent = '取消打卡'; }, 3000); return; }
-      delete REC[e.id]; saveRec(); afterChange(e); toast('已取消：' + e.name);
+      delete REC[e.id]; touch(e.id); saveRec(); afterChange(e); toast('已取消：' + e.name);
     });
     btns.appendChild(un);
   }
@@ -751,7 +778,7 @@ function popupNode(e){
 }
 function checkIn(e, date, note){
   var was = !!REC[e.id];
-  REC[e.id] = {date: date || null, note: (note || '').trim()};
+  REC[e.id] = {date: date || null, note: (note || '').trim()}; touch(e.id);
   saveRec(); afterChange(e);
   toast((was ? '已更新：' : '打卡成功：') + e.name);
 }
@@ -946,7 +973,7 @@ $('#importFile').addEventListener('change', function(){
   rd.onload = function(){
     try{
       var j = JSON.parse(rd.result), recs = j.records || j, n = 0;
-      Object.keys(recs).forEach(function(id){ var r = recs[id]; if(r && typeof r === 'object'){ REC[id] = {date: r.date || null, note: r.note || ''}; n++; } });
+      Object.keys(recs).forEach(function(id){ var r = recs[id]; if(r && typeof r === 'object'){ REC[id] = {date: r.date || null, note: r.note || ''}; touch(id); n++; } });
       if(DATA) migrateRecords();
       saveRec(); if(DATA){ DATA.entities.forEach(restyle); renderProgress(); renderList(); renderMenu(); }
       toast('已导入 ' + n + ' 条打卡记录');
@@ -1078,7 +1105,7 @@ $('#fpApply').addEventListener('click', function(){
   document.querySelectorAll('#fpList input').forEach(function(c){
     if(!c.checked) return; var r = fpResults[+c.dataset.i], old = REC[r.e.id];
     var note = '足迹识别：去过 ' + r.days + ' 天' + (r.photos ? '，' + r.photos + ' 张照片' : '');
-    REC[r.e.id] = {date: (old && old.date) || r.first, note: old && old.note && old.note !== '之前去过' ? old.note : note}; n++;
+    REC[r.e.id] = {date: (old && old.date) || r.first, note: old && old.note && old.note !== '之前去过' ? old.note : note}; touch(r.e.id); n++;
   });
   saveRec(); DATA.entities.forEach(restyle); renderProgress(); renderList(); renderMenu();
   $('#fpPanel').hidden = true; toast('已根据足迹打卡 ' + n + ' 处');
@@ -1095,7 +1122,7 @@ function migrateRecords(){
     var cand = DATA.entities.filter(function(e){ return e.name === name && (kind ? e.kind === kind : e.kind !== 'greenway'); });
     if(!cand.length) return;
     var pick = cand.filter(function(e){ return e.munis.indexOf('世田谷区') >= 0 || e.munis.indexOf('杉並区') >= 0; })[0] || cand[0];
-    if(!REC[pick.id]){ REC[pick.id] = REC[id]; delete REC[id]; moved++; }
+    if(!REC[pick.id]){ REC[pick.id] = REC[id]; delete REC[id]; DIRTY[pick.id] = 1; moved++; }
   });
   if(moved) saveRec();
 }
@@ -1106,7 +1133,7 @@ function seed(){
   DATA.entities.forEach(function(e){
     var names = [e.name].concat(e.alts).map(normName);
     want.forEach(function(sn){
-      if(names.indexOf(normName(sn)) >= 0){ if(!REC[e.id]) REC[e.id] = {date:null, note:'之前去过'}; if(hit.indexOf(sn) < 0) hit.push(sn); }
+      if(names.indexOf(normName(sn)) >= 0){ if(!REC[e.id]){ REC[e.id] = {date:null, note:'之前去过', u:1}; DIRTY[e.id] = 1; } if(hit.indexOf(sn) < 0) hit.push(sn); }
     });
   });
   if(hit.length){ saveRec(); S.set(K.seed, done.concat(hit)); toast('已把之前去过的 ' + hit.length + ' 个地方标为打卡'); }
@@ -1124,6 +1151,7 @@ $('#retryBtn').addEventListener('click', function(){ loadData(true, true); });
 function applyData(data, fit){
   DATA = data; BYID = new Map(); data.entities.forEach(function(e){ BYID.set(e.id, e); });
   migrateRecords(); seed(); drawAll(); renderProgress(); renderList(); renderMenu();
+  if(window.syncSoon && Object.keys(DIRTY).length) window.syncSoon();
   if(fit) map.fitBounds([[35.55, 139.0], [35.85, 139.92]]);
 }
 var loading = false;
@@ -1171,6 +1199,110 @@ if(window.matchMedia){
   if(mq.addEventListener) mq.addEventListener('change', onTheme); else if(mq.addListener) mq.addListener(onTheme);
 }
 window.addEventListener('resize', function(){ if(DATA) renderList(); });
+
+// ---------- Cloud sync (Supabase) ----------
+// Each check-in is one row (user_id, park_id). The newer change wins, by the time it was made on the device.
+// Un-checking keeps a row with deleted=true so other devices learn about it.
+var SB_URL = 'https://vgpocbwfpapobwduhqie.supabase.co';
+var SB_KEY = 'sb_publishable_pziloc6EuTby3HNf7Btd3Q_uIDVBmN2';
+var sb = null, user = null, syncing = false, syncAgain = false, syncTimer = null, lastSync = S.get('tpm.lastSync', null), syncErr = null;
+try{ if(window.supabase) sb = supabase.createClient(SB_URL, SB_KEY, {auth:{persistSession:true, autoRefreshToken:true, detectSessionInUrl:true, storageKey:'tpm.auth'}}); }catch(e){ sb = null; }
+function nameOf(id){ var e = BYID.get(id); return e ? e.name : (id.split('|')[1] || id); }
+function setSyncUi(state){
+  var dot = $('#syncDot');
+  $('#syncOut').hidden = !!user; $('#syncIn').hidden = !user;
+  if(!sb){ $('#syncOut').querySelector('p').textContent = '同步组件没有加载出来，检查一下网络后刷新页面。'; }
+  if(!user){ dot.hidden = true; return; }
+  dot.hidden = false; dot.className = 'sdot' + (state === 'busy' ? ' busy' : '') + (syncErr ? ' error' : (Object.keys(DIRTY).length ? ' pending' : ''));
+  var t = lastSync ? new Date(lastSync).toLocaleString('zh-CN', {hour12:false, month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit'}) : '还没有';
+  var pend = Object.keys(DIRTY).length;
+  $('#syncStatus').textContent = (user.email || '已登录') + '　' + (state === 'busy' ? '正在同步…' : (syncErr ? '同步失败：' + syncErr : '上次同步 ' + t + (pend ? '，还有 ' + pend + ' 条待上传' : '')));
+}
+function syncNow(loud){
+  if(!sb || !user) return Promise.resolve();
+  if(syncing){ syncAgain = true; return Promise.resolve(); }
+  syncing = true; syncErr = null; setSyncUi('busy');
+  var up = [], upTs = {}, down = 0;
+  return sb.from('checkins').select('park_id,date,note,deleted,updated_at').then(function(res){
+    if(res.error) throw res.error;
+    var remote = {};
+    (res.data || []).forEach(function(r){ remote[r.park_id] = r; });
+    Object.keys(remote).forEach(function(id){
+      var r = remote[id], rt = Date.parse(r.updated_at) || 0, l = REC[id], lt = l ? (l.u || 1) : (TOMB[id] || 0);
+      if(rt > lt){
+        if(r.deleted){ if(l){ delete REC[id]; down++; } TOMB[id] = rt; }
+        else { REC[id] = {date:r.date || null, note:r.note || '', u:rt}; delete TOMB[id]; if(!l || l.date !== r.date || (l.note || '') !== (r.note || '')) down++; }
+        delete DIRTY[id];
+      } else if(lt > rt) DIRTY[id] = 1;
+    });
+    Object.keys(REC).forEach(function(id){ if(!remote[id]) DIRTY[id] = 1; });
+    Object.keys(TOMB).forEach(function(id){ if(!remote[id]){ delete TOMB[id]; delete DIRTY[id]; } }); // never uploaded: nothing to delete
+    Object.keys(DIRTY).forEach(function(id){
+      var l = REC[id], ts = l ? (l.u || 1) : TOMB[id]; if(!ts) { delete DIRTY[id]; return; }
+      upTs[id] = ts;
+      up.push({user_id:user.id, park_id:id, name:nameOf(id), date:l ? (l.date || null) : null, note:l ? (l.note || '') : '', deleted:!l, updated_at:new Date(ts).toISOString()});
+    });
+    saveRec();
+    if(!up.length) return {};
+    var chunks = []; for(var i = 0; i < up.length; i += 500) chunks.push(up.slice(i, i + 500));
+    return chunks.reduce(function(p, c){ return p.then(function(){ return sb.from('checkins').upsert(c, {onConflict:'user_id,park_id'}).then(function(r){ if(r.error) throw r.error; }); }); }, Promise.resolve());
+  }).then(function(){
+    Object.keys(upTs).forEach(function(id){ var l = REC[id], ts = l ? (l.u || 1) : TOMB[id]; if(ts === upTs[id]) delete DIRTY[id]; });
+    lastSync = Date.now(); S.set('tpm.lastSync', lastSync); saveRec();
+    if(DATA && down){ DATA.entities.forEach(restyle); renderProgress(); renderList(); renderMenu(); }
+    if(loud || down) toast('已同步' + (down ? '：从云端更新了 ' + down + ' 条' : '') + (up.length ? (down ? '，' : '：') + '上传了 ' + up.length + ' 条' : (down ? '' : '，没有新变化')));
+  }).catch(function(err){
+    var m = (err && (err.message || err.error_description)) || String(err);
+    syncErr = /relation .*checkins|does not exist|schema cache/i.test(m) ? '云端还没建表' : (/fetch|network/i.test(m) ? '连不上网络，恢复后会自动重试' : m);
+    if(loud) toast('同步失败：' + syncErr);
+  }).then(function(){
+    syncing = false; setSyncUi();
+    if(syncAgain){ syncAgain = false; syncNow(false); }
+  });
+}
+window.syncSoon = function(){ setSyncUi(); if(!user) return; clearTimeout(syncTimer); syncTimer = setTimeout(function(){ syncNow(false); }, 1500); };
+function authMsg(err){
+  var m = (err && err.message) || String(err);
+  if(/Invalid login credentials/i.test(m)) return '邮箱或密码不对';
+  if(/Email not confirmed/i.test(m)) return '请先点确认邮件里的链接，再回来登录';
+  if(/already registered|already exists/i.test(m)) return '这个邮箱已经注册过了，直接登录就行';
+  if(/at least 6|Password should/i.test(m)) return '密码至少要 6 位';
+  if(/Signups not allowed/i.test(m)) return '这个项目已经关闭了新用户注册';
+  if(/fetch|network/i.test(m)) return '连不上服务器，检查一下网络';
+  return m;
+}
+function authInputs(){
+  var em = $('#authEmail').value.trim(), pw = $('#authPw').value;
+  if(!/^\S+@\S+\.\S+$/.test(em)){ toast('邮箱格式不对'); return null; }
+  if(pw.length < 6){ toast('密码至少要 6 位'); return null; }
+  return {email:em, password:pw};
+}
+$('#authForm').addEventListener('submit', function(ev){
+  ev.preventDefault(); if(!sb) return; var c = authInputs(); if(!c) return;
+  $('#loginBtn').disabled = true;
+  sb.auth.signInWithPassword(c).then(function(r){ if(r.error) throw r.error; toast('已登录，正在同步'); $('#authPw').value = ''; })
+    .catch(function(e){ toast(authMsg(e)); }).then(function(){ $('#loginBtn').disabled = false; });
+});
+$('#signupBtn').addEventListener('click', function(){
+  if(!sb) return; var c = authInputs(); if(!c) return;
+  $('#signupBtn').disabled = true;
+  sb.auth.signUp({email:c.email, password:c.password, options:{emailRedirectTo:location.origin + location.pathname}}).then(function(r){
+    if(r.error) throw r.error;
+    if(r.data && r.data.session) toast('注册成功，已登录');
+    else toast('确认邮件已发到 ' + c.email + '，点里面的链接后回来登录');
+  }).catch(function(e){ toast(authMsg(e)); }).then(function(){ $('#signupBtn').disabled = false; });
+});
+$('#syncNowBtn').addEventListener('click', function(){ syncNow(true); });
+$('#logoutBtn').addEventListener('click', function(){ if(sb) sb.auth.signOut().then(function(){ toast('已退出登录，本机的打卡记录还在'); }); });
+if(sb){
+  sb.auth.onAuthStateChange(function(event, session){
+    var was = user && user.id; user = session ? session.user : null; setSyncUi();
+    if(user && user.id !== was) setTimeout(function(){ syncNow(false); }, 0);
+  });
+}
+document.addEventListener('visibilitychange', function(){ if(document.visibilityState === 'visible' && user && (!lastSync || Date.now() - lastSync > 20000)) syncNow(false); });
+window.addEventListener('online', function(){ if(user) syncNow(false); });
+setSyncUi();
 
 loadData(false, true);
 })();
