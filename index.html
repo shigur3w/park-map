@@ -343,10 +343,8 @@ var MAIN = 'https://overpass-api.de/api/interpreter';
 var ENDPOINTS = [MAIN, MAIN, 'https://overpass.kumi.systems/api/interpreter', MAIN, 'https://overpass.private.coffee/api/interpreter', MAIN];
 var DATA_VER = 3;
 var K = {rec:'tpm.checkins.v1', seed:'tpm.seeded.v1', base:'tpm.base.v1', ui:'tpm.ui.v2', view:'tpm.view.v1'};
-// Parks visited before this app existed. Matched once against exact OSM names.
-var SEED_NAMES = ['蘆花恒春園','羽根木公園','駒沢オリンピック公園','世田谷公園','和田堀公園','善福寺川緑地','杉並児童交通公園','高井戸公園','下高井戸おおぞら公園',
-  '小金井公園','葛西臨海公園','光が丘公園','代々木公園','新宿御苑','上野恩賜公園','上野公園','井の頭恩賜公園','井の頭公園','武蔵野公園','野川公園',
-  '北の丸公園','日比谷公園','皇居東御苑','芝公園','小宮公園'];
+// Parks to pre-mark as visited on first load (empty: everyone starts from a blank map).
+var SEED_NAMES = [];
 var ZH_JA = {'驹':'駒','泽':'沢','绿':'緑','园':'園','芦':'蘆','并':'並','儿':'児','广':'広','场':'場','冈':'岡','桥':'橋','乌':'烏','带':'帯',
   '宫':'宮','树':'樹','滨':'浜','泷':'滝','边':'辺','东':'東','门':'門','马':'馬','鸟':'鳥','叶':'葉','樱':'桜','观':'観','见':'見','冢':'塚',
   '户':'戸','给':'給','纪':'紀','风':'風','车':'車','运':'運','动':'動','乐':'楽','馆':'館','亲':'親','乡':'郷','庄':'荘','龙':'竜','丰':'豊',
@@ -1268,6 +1266,8 @@ function authMsg(err){
   if(/already registered|already exists/i.test(m)) return '这个邮箱已经注册过了，直接登录就行';
   if(/at least 6|Password should/i.test(m)) return '密码至少要 6 位';
   if(/Signups not allowed/i.test(m)) return '这个项目已经关闭了新用户注册';
+  if(/not authorized/i.test(m)) return '注册邮件发不出去：请让管理员在 Supabase 里关闭 Confirm email';
+  if(/rate limit|too many/i.test(m)) return '操作太频繁了，过几分钟再试';
   if(/fetch|network/i.test(m)) return '连不上服务器，检查一下网络';
   return m;
 }
