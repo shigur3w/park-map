@@ -23,7 +23,8 @@ var CHUNKS = [
 ];
 // The main server sometimes answers 502 when busy; it usually works a few seconds later, so it is retried between the mirrors.
 var MAIN = 'https://overpass-api.de/api/interpreter';
-var ENDPOINTS = [MAIN, MAIN, 'https://overpass.kumi.systems/api/interpreter', MAIN, 'https://overpass.private.coffee/api/interpreter', MAIN];
+var MAILRU = 'https://maps.mail.ru/osm/tools/overpass/api/interpreter';
+var ENDPOINTS = [MAIN, MAIN, 'https://overpass.kumi.systems/api/interpreter', MAILRU, MAIN, 'https://overpass.private.coffee/api/interpreter', MAILRU, MAIN];
 var DATA_VER = 3;
 // ---------- Geometry helpers ----------
 function r5(x){ return Math.round(x * 1e5) / 1e5; }
@@ -101,7 +102,9 @@ function overpass(q){
       headers:HEADERS, signal:ctl.signal})
       .then(function(res){ clearTimeout(t); if(!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
       .then(function(j){ if(j.remark && /runtime error/i.test(j.remark)) throw new Error(j.remark); return j; })
-      .catch(function(e){ clearTimeout(t); lastErr = e; return new Promise(function(r){ setTimeout(r, 4000); }).then(next); });
+      .catch(function(e){ clearTimeout(t); lastErr = e;
+        if(typeof window === 'undefined') console.log('   attempt ' + i + ' ' + url.split('/')[2] + ' failed: ' + (e && e.name === 'AbortError' ? 'timeout' : (e && (e.message + (e.cause ? ' / ' + (e.cause.code || e.cause.message) : ''))) || e));
+        return new Promise(function(r){ setTimeout(r, 4000 * Math.min(i, 4)); }).then(next); });
   }
   return next();
 }
