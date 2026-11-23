@@ -239,8 +239,10 @@ function processData(boundaryEls, chunkEls, region){
     var pts = extremes(all);
     var munis = munisAt(pts, mi); if(!munis.length) return; // outside the region's districts
     var alts = [tags['name:ja'], tags.alt_name, tags.official_name, tags.old_name, tags['name:zh']].filter(Boolean);
-    var wd = !!(tags.wikidata || tags.wikipedia || tags['name:en']);
-    var lv = /^(国営|国立|都立|府立|県立|国家|省级|市级)/.test(name) || /国土交通省|環境省|^(東京都|大阪府|奈良県|和歌山県)|公園協会|公园管理/.test(tags.operator || '');
+    // importance hints: an encyclopedia entry, and parks run by the state or a prefecture (not by a ward or city)
+    var wd = !!(tags.wikidata || tags.wikipedia);
+    var op = tags.operator || '';
+    var lv = /^(国営|国立|都立|府立|県立|国家|省级)/.test(name) || /国土交通省|環境省|建設局|公園協会/.test(op) || /^(東京都|大阪府|奈良県|和歌山県)$/.test(op);
     raw.push({osm:key, name:name, unnamed:unnamed, kind:kind, munis:munis, geoms:g, alts:alts, center:bboxCenter(pts), wd:wd, lv:lv});
   }); });
   // Merge pieces of one place: same name and kind, near each other.
