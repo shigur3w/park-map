@@ -1,0 +1,36 @@
+name: Update park data
+
+on:
+  schedule:
+    - cron: '17 18 1 * *'   # monthly, 2nd of the month around 03:17 Tokyo time
+  workflow_dispatch:          # "Run workflow" button on the Actions tab
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-parks
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Download and process OpenStreetMap park data
+        run: node scripts/build-data.js
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/
+          if git diff --cached --quiet; then
+            echo "No changes"
+          else
+            git commit -m "Update park data from OpenStreetMap"
+            git push
+          fi
