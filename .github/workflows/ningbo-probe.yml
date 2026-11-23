@@ -1,0 +1,23 @@
+name: Ningbo probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: node scripts/ningbo-probe.js
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ningbo-probe
+          path: probe-out/
+          retention-days: 3
