@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   probe:
@@ -16,8 +16,11 @@ jobs:
         with:
           node-version: 20
       - run: node scripts/ningbo-probe.js
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ningbo-probe
-          path: probe-out/
-          retention-days: 3
+      - name: Push results to a temporary branch (public OpenStreetMap data only)
+        run: |
+          cd probe-out
+          git init -q -b probe-data
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add . && git commit -q -m "Ningbo probe output (temporary)"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" probe-data
