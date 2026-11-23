@@ -37,6 +37,7 @@ var HZ_OUTER = ['萧山区','余杭区','临平区','钱塘区','富阳区','临
 var HANGZHOU = HZ_CORE.concat(HZ_OUTER);
 var HANGZHOU_BBOX = [29.70, 118.85, 30.60, 120.80];
 var CN_SKIP = '庄园|农场|度假村|山庄|酒店';
+var KANSAI_BBOX = [33.40, 134.95, 35.10, 136.25];
 var REGIONS = {
   tokyo:    {id:'tokyo', country:'日本', label:'东京', full:'东京 23区＋多摩', all:'全东京', groups:[['23区', MUNIS_23], ['多摩', MUNIS_TAMA]], munis:MUNIS,
              adminLevel:'7', bbox:TOKYO_BBOX, chunks:CHUNKS, wayRe:'緑道', unnamed:false, idPrefix:'', minEntities:3000, prefer:['世田谷区','杉並区'],
@@ -45,6 +46,12 @@ var REGIONS = {
              adminLevel:'6', bbox:HANGZHOU_BBOX, chunks:[{label:'临安・富阳西部', b:[29.70, 118.85, 30.60, 119.90]}, {label:'富阳・余杭・西湖', b:[29.70, 119.90, 30.60, 120.20]}, {label:'主城区・萧山・钱塘・临平', b:[29.70, 120.20, 30.60, 120.80]}],
              wayRe:'绿道|綠道', unnamed:true, idPrefix:'hz|', minEntities:200, exclude:CN_SKIP, prefer:HZ_CORE,
              file:'hangzhou.json', versionFile:'hangzhou-version.json', dbKey:'data:hangzhou', view:[[30.10, 119.95], [30.45, 120.45]], center:[30.2747, 120.1636], zoom:11},
+  kansai:   {id:'kansai', country:'日本', label:'大阪・奈良・和歌山', full:'大阪府・奈良県・和歌山県', all:'三府县', groups:[], munis:[],
+             prefs:['大阪府', '奈良県', '和歌山県'], adminLevel:'7', bbox:KANSAI_BBOX,
+             chunks:[{label:'大阪府北部', b:[34.55, 135.09, 35.06, 135.75]}, {label:'大阪府南部', b:[34.25, 135.09, 34.55, 135.75]},
+                     {label:'奈良県', b:[33.85, 135.53, 34.80, 136.25]}, {label:'和歌山県', b:[33.40, 134.95, 34.40, 136.05]}],
+             wayRe:'緑道', unnamed:false, idPrefix:'ks|', minEntities:1500, prefer:['大阪市'],
+             file:'kansai.json', versionFile:'kansai-version.json', dbKey:'data:kansai', view:[[34.40, 135.30], [34.85, 135.85]], center:[34.6873, 135.5262], zoom:11},
   ningbo:   {id:'ningbo', country:'中国', label:'宁波', full:'宁波全域（6 区 4 县市）', all:'宁波全域', groups:[['市区', NINGBO_CORE], ['下辖县市', NINGBO_COUNTY]], munis:NINGBO,
              adminLevel:'6', bbox:NINGBO_BBOX, chunks:[{label:'余姚・慈溪', b:[29.80, 120.85, 30.45, 121.50]}, {label:'宁波市区', b:[29.40, 121.20, 30.10, 122.30]}, {label:'宁海・象山・奉化南部', b:[28.80, 121.10, 29.60, 122.30]}],
              wayRe:'绿道|綠道', unnamed:true, idPrefix:'nb|', minEntities:200, exclude:CN_SKIP, prefer:NINGBO_CORE,
@@ -105,6 +112,8 @@ function simplify(c, minM){ // drop points closer than minM metres to the last k
 // ---------- Overpass ----------
 function boundaryQuery(region){
   region = region || REGIONS.tokyo;
+  if(region.prefs) return '[out:json][timeout:180];\n(\n  rel["boundary"="administrative"]["admin_level"="4"]["name"~"^(' + region.prefs.join('|') + ')$"](' + region.bbox.join(',') + ');\n' +
+    '  rel["boundary"="administrative"]["admin_level"="' + region.adminLevel + '"](' + region.bbox.join(',') + ');\n);\nout geom;';
   return '[out:json][timeout:180];\nrel["boundary"="administrative"]["admin_level"="' + region.adminLevel + '"]["name"~"^(' + region.munis.join('|') + ')$"](' + region.bbox.join(',') + ');\nout geom;';
 }
 function chunkQuery(b, region){
@@ -188,9 +197,33 @@ function munisAt(pts, mi){
   });
   return hit;
 }
+function outerRings(e){
+  var outer = (e.members || []).filter(function(m){ return m.type === 'way' && m.geometry && m.role !== 'inner'; })
+    .map(function(m){ return m.geometry.filter(Boolean).map(function(p){ return [p.lat, p.lon]; }); });
+  return joinRings(outer).filter(function(r){ return r.length > 3 && eq(r[0], r[r.length-1]); });
+}
+// For a region given as whole prefectures: keep the municipalities whose outline centre lies inside one of them.
+function prefMunis(boundaryEls, region){
+  var prefRings = {}, groups = region.prefs.map(function(p){ return [p, []]; }), keep = [];
+  boundaryEls.forEach(function(e){ if(e.tags && e.tags.admin_level === '4' && region.prefs.indexOf(e.tags.name) >= 0) prefRings[e.tags.name] = outerRings(e).map(function(r){ return simplify(r, 50); }); });
+  boundaryEls.forEach(function(e){
+    if(!e.tags || e.tags.admin_level !== region.adminLevel || !e.tags.name) return;
+    var rs = outerRings(e); if(!rs.length) return;
+    var big = rs.reduce(function(a, b){ return ringArea(b) > ringArea(a) ? b : a; }), c = bboxCenter(big);
+    if(!inRing(c[0], c[1], big)) c = big[Math.floor(big.length / 2)]; // odd shapes: use a point on the outline
+    for(var i = 0; i < groups.length; i++){
+      var pr = prefRings[groups[i][0]] || [];
+      if(pr.some(function(r){ return inRing(c[0], c[1], r); })){ if(groups[i][1].indexOf(e.tags.name) < 0) groups[i][1].push(e.tags.name); keep.push(e); return; }
+    }
+  });
+  groups.forEach(function(g){ g[1].sort(function(a, b){ return a.localeCompare(b, 'ja'); }); });
+  return {groups:groups, munis:[].concat.apply([], groups.map(function(g){ return g[1]; })), els:keep};
+}
 function processData(boundaryEls, chunkEls, region){
   region = region || REGIONS.tokyo;
-  var MU = region.munis, wayRx = new RegExp(region.wayRe), skipRx = region.exclude ? new RegExp(region.exclude) : null;
+  var dyn = null;
+  if(region.prefs){ dyn = prefMunis(boundaryEls, region); boundaryEls = dyn.els; }
+  var MU = dyn ? dyn.munis : region.munis, wayRx = new RegExp(region.wayRe), skipRx = region.exclude ? new RegExp(region.exclude) : null;
   var mi = buildMuniIndex(boundaryEls, MU);
   if(!mi.rings.length) throw new Error('没有拿到' + region.label + '各区的边界');
   var seen = new Set(), raw = [];
@@ -206,7 +239,9 @@ function processData(boundaryEls, chunkEls, region){
     var pts = extremes(all);
     var munis = munisAt(pts, mi); if(!munis.length) return; // outside the region's districts
     var alts = [tags['name:ja'], tags.alt_name, tags.official_name, tags.old_name, tags['name:zh']].filter(Boolean);
-    raw.push({osm:key, name:name, unnamed:unnamed, kind:kind, munis:munis, geoms:g, alts:alts, center:bboxCenter(pts)});
+    var wd = !!(tags.wikidata || tags.wikipedia || tags['name:en']);
+    var lv = /^(国営|国立|都立|府立|県立|国家|省级|市级)/.test(name) || /国土交通省|環境省|^(東京都|大阪府|奈良県|和歌山県)|公園協会|公园管理/.test(tags.operator || '');
+    raw.push({osm:key, name:name, unnamed:unnamed, kind:kind, munis:munis, geoms:g, alts:alts, center:bboxCenter(pts), wd:wd, lv:lv});
   }); });
   // Merge pieces of one place: same name and kind, near each other.
   var groups = new Map(), clusters = [];
@@ -217,6 +252,7 @@ function processData(boundaryEls, chunkEls, region){
     for(var i = 0; i < list.length && !target; i++){ for(var j = 0; j < list[i].cs.length; j++){ if(hav(list[i].cs[j], x.center) < lim){ target = list[i]; break; } } }
     if(!target){ target = {name:x.name, unnamed:x.unnamed, kind:x.kind, munis:[], geoms:[], alts:[], osm:x.osm, cs:[]}; list.push(target); clusters.push(target); }
     target.cs.push(x.center);
+    if(x.wd) target.wd = true; if(x.lv) target.lv = true;
     x.munis.forEach(function(m){ if(target.munis.indexOf(m) < 0) target.munis.push(m); });
     x.alts.forEach(function(a){ if(target.alts.indexOf(a) < 0) target.alts.push(a); });
     target.geoms = target.geoms.concat(x.geoms);
@@ -244,9 +280,12 @@ function processData(boundaryEls, chunkEls, region){
     });
     var all = []; e.geoms.forEach(function(g){ (g.r || g.c).forEach(function(p){ all.push(p); }); });
     e.bb = all.length ? bboxOf(all) : null;
+    if(cl.wd) e.wd = 1; if(cl.lv) e.lv = 1; // importance hints for decluttering at small scales
     return e;
   });
-  return {v:DATA_VER, region:region.id, fetchedAt:new Date().toISOString(), boundaries:mi.lines, entities:entities};
+  var out = {v:DATA_VER, region:region.id, fetchedAt:new Date().toISOString(), boundaries:mi.lines, entities:entities};
+  if(dyn){ out.groups = dyn.groups; out.munis = dyn.munis; }
+  return out;
 }
 
 

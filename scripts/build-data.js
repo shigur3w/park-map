@@ -14,7 +14,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 async function buildRegion(region) {
   const t0 = Date.now();
-  console.log(`== ${region.label}: boundaries of ${region.munis.length} districts…`);
+  console.log(`== ${region.label}: boundaries of ${region.prefs ? region.prefs.join('・') + ' and their municipalities' : region.munis.length + ' districts'}…`);
   const boundary = await P.overpass(P.boundaryQuery(region));
   console.log('  ', boundary.elements.length, 'relations');
 

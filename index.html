@@ -77,6 +77,8 @@ button{cursor:pointer}
 .pg{min-width:0}
 .pg .row{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
 .pg .row b{color:var(--fg);font-weight:600}
+.pg .row span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;margin-right:4px}
+.pg .row span:last-child{white-space:nowrap}
 .bar{height:6px;border-radius:3px;background:var(--surface-2);overflow:hidden;margin-top:3px}
 .bar i{display:block;height:100%;background:var(--visited);border-radius:3px;transition:width .4s}
 
@@ -212,6 +214,9 @@ button{cursor:pointer}
   .handle{padding-top:6px;padding-bottom:8px}
 }
 /* Full-screen map */
+.zoom-hint{position:absolute;z-index:440;left:50%;transform:translateX(-50%);bottom:calc(var(--peek) + 34px);max-width:calc(100% - 140px);padding:3px 10px;border-radius:12px;
+  background:color-mix(in srgb,var(--surface) 85%,transparent);color:var(--muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
+body.immersive .zoom-hint{bottom:calc(env(safe-area-inset-bottom,0px) + 34px)}
 .mini{display:none}
 body.immersive .topbar,body.immersive .sheet{display:none!important}
 body.immersive #map{inset:0!important}
@@ -237,6 +242,8 @@ body.immersive .toast{top:calc(env(safe-area-inset-top,0px) + 56px)}
   #map{left:380px}
   .fabs{bottom:96px}
   body.immersive #map{left:0!important}
+  .zoom-hint{left:calc(50% + 190px);bottom:34px;max-width:calc(100% - 520px)}
+  body.immersive .zoom-hint{left:50%}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
@@ -257,6 +264,7 @@ body.immersive .toast{top:calc(env(safe-area-inset-top,0px) + 56px)}
 
   <div class="mapwrap">
     <div id="map" aria-label="公园地图"></div>
+    <div class="zoom-hint" id="zoomHint" hidden></div>
     <div class="mini" id="mini" aria-live="polite"><span class="seal" aria-hidden="true">園</span><span id="miniText">—</span></div>
     <div class="fabs">
       <button class="fab" id="fsBtn" aria-label="全屏地图" aria-pressed="false" title="全屏地图">
@@ -561,6 +569,35 @@ function restyle(e){
   L2.dot.setStyle(st.dot); L2.dot.setRadius(st.dot.radius);
 }
 // Only draw what is on screen: dots always, shapes from zoom 14.
+// Zoomed out, dots are decluttered the way map labels are: most important first, and a dot is skipped
+// when it would land closer than GAP pixels to one already placed. Zooming in lowers the gap.
+var GAP = {8:26, 9:24, 10:20, 11:16, 12:12, 13:8};
+function importance(e){
+  if(e._imp == null){
+    var size = e.kind === 'greenway' ? Math.log10(Math.max((e.len || 0) * 25, 100)) : Math.log10(Math.max(e.area || 0, 100)); // 1 ha = 4, 100 ha = 6
+    e._imp = size + (e.wd ? 1.5 : 0) + (e.lv ? 1 : 0) + (e.kind === 'garden' ? 0.3 : 0) - (e.unnamed ? 1 : 0);
+  }
+  return e._imp + (REC[e.id] ? 3 : 0); // your own check-ins stay visible longest
+}
+var hiddenCount = 0;
+function declutter(ids, z){
+  hiddenCount = 0;
+  if(z >= SHAPE_ZOOM) return ids;
+  var d = GAP[z] || (z < 8 ? 28 : 0); if(!d) return ids;
+  var arr = []; ids.forEach(function(id){ arr.push(BYID.get(id)); });
+  arr.sort(function(a, b){ return importance(b) - importance(a); });
+  var grid = new Map(), out = new Set(), d2 = d * d;
+  arr.forEach(function(e){
+    var p = map.latLngToContainerPoint(e.center), gx = Math.floor(p.x / d), gy = Math.floor(p.y / d), free = true;
+    for(var dx = -1; dx <= 1 && free; dx++) for(var dy = -1; dy <= 1 && free; dy++){
+      var c = grid.get((gx + dx) + ',' + (gy + dy)); if(!c) continue;
+      for(var i = 0; i < c.length; i++){ var q = c[i]; if((q.x - p.x) * (q.x - p.x) + (q.y - p.y) * (q.y - p.y) < d2){ free = false; break; } }
+    }
+    if(free || e.id === currentId){ out.add(e.id); var k = gx + ',' + gy; if(!grid.has(k)) grid.set(k, []); grid.get(k).push(p); }
+  });
+  hiddenCount = arr.length - out.size;
+  return out;
+}
 var lastZoomBucket = null;
 function refreshView(){
   if(!DATA) return;
@@ -570,6 +607,8 @@ function refreshView(){
     var bb = e.bb;
     if(bb ? (bb[2] >= s && bb[0] <= n && bb[3] >= w && bb[1] <= ea) : (e.center[0] >= s && e.center[0] <= n && e.center[1] >= w && e.center[1] <= ea)) want.add(e.id);
   });
+  want = declutter(want, z);
+  var hint = $('#zoomHint'); hint.hidden = !hiddenCount; if(hiddenCount) hint.textContent = '放大可看到全部 · 已省略 ' + hiddenCount.toLocaleString() + ' 处较小的公园';
   SHOWN.forEach(function(st, id){
     if(want.has(id)) return; var L2 = LAYERS.get(id);
     dotLayer.removeLayer(L2.dot); if(st.shapes) L2.parts.forEach(function(p){ shapeLayer.removeLayer(p); });
@@ -674,6 +713,7 @@ function renderProgress(){
   else if(REGION.groups.length > 1) REGION.groups.forEach(function(g, i){ box.appendChild(pgNode(g[0], countBy(function(e){ return inMuniFilter(e, 'g:' + i); }))); });
   else if(REGION.unnamed){ box.appendChild(pgNode('有名字的', countBy(function(e){ return !e.unnamed; }))); box.appendChild(pgNode('无名公园', countBy(function(e){ return !!e.unnamed; }))); }
   box.classList.toggle('three', box.children.length === 3);
+  box.style.gridTemplateColumns = 'repeat(' + box.children.length + ', minmax(0, 1fr))';
   var all = countBy(function(){ return true; });
   var pct = all[1] ? (Math.round(all[0] / all[1] * 1000) / 10) : 0;
   $('#subtitle').textContent = (isMobile() ? '' : REGION.full + ' · ') + '已打卡 ' + all[0] + ' 处 · ' + pct + '%';
@@ -1018,6 +1058,7 @@ function setLoadProgress(done, total, title){
 }
 $('#retryBtn').addEventListener('click', function(){ loadFromOverpass(true, true); });
 function applyData(data, fit){
+  if(data.groups && data.munis){ REGION.groups = data.groups; REGION.munis = data.munis; buildMuniSelect(); }
   DATA = data; BYID = new Map(); data.entities.forEach(function(e){ BYID.set(e.id, e); });
   migrateRecords(); seed(); drawAll(); renderProgress(); renderList(); renderMenu();
   if(window.syncSoon && Object.keys(DIRTY).length) window.syncSoon();
