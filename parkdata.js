@@ -1,5 +1,5 @@
 /* parkdata.js — shared by the page (browser) and scripts/build-data.js (Node).
- * Downloads Tokyo park, garden and greenway data from OpenStreetMap (Overpass API)
+ * Downloads park, garden and greenway data for each region (Tokyo, Ningbo) from OpenStreetMap (Overpass API)
  * and turns it into the compact format the map uses. */
 (function(root){
 'use strict';
@@ -26,6 +26,17 @@ var MAIN = 'https://overpass-api.de/api/interpreter';
 var MAILRU = 'https://maps.mail.ru/osm/tools/overpass/api/interpreter';
 var ENDPOINTS = [MAIN, MAIN, 'https://overpass.kumi.systems/api/interpreter', MAILRU, MAIN, 'https://overpass.private.coffee/api/interpreter', MAILRU, MAIN];
 var DATA_VER = 3;
+// Ningbo: the six urban districts. Unnamed OSM parks are kept so people can name them when they check in.
+var NINGBO = ['海曙区','江北区','鄞州区','镇海区','北仑区','奉化区'];
+var NINGBO_BBOX = [29.40, 121.20, 30.10, 122.20];
+var REGIONS = {
+  tokyo:  {id:'tokyo', label:'东京', full:'东京 23区＋多摩', all:'全东京', groups:[['23区', MUNIS_23], ['多摩', MUNIS_TAMA]], munis:MUNIS,
+           adminLevel:'7', bbox:TOKYO_BBOX, chunks:CHUNKS, wayRe:'緑道', unnamed:false, idPrefix:'', minEntities:3000,
+           file:'parks.json', versionFile:'version.json', dbKey:'data', view:[[35.55, 139.0], [35.85, 139.92]]},
+  ningbo: {id:'ningbo', label:'宁波', full:'宁波市区（6 区）', all:'宁波市区', groups:[['市区', NINGBO]], munis:NINGBO,
+           adminLevel:'6', bbox:NINGBO_BBOX, chunks:[{label:'宁波市区', b:NINGBO_BBOX}], wayRe:'绿道|綠道', unnamed:true, idPrefix:'nb|', minEntities:150,
+           exclude:'庄园|农场|度假村|山庄|酒店', file:'ningbo.json', versionFile:'ningbo-version.json', dbKey:'data:ningbo', view:[[29.70, 121.40], [30.00, 121.85]]}
+};
 // ---------- Geometry helpers ----------
 function r5(x){ return Math.round(x * 1e5) / 1e5; }
 function eq(a, b){ return a[0] === b[0] && a[1] === b[1]; }
@@ -79,16 +90,18 @@ function simplify(c, minM){ // drop points closer than minM metres to the last k
   out.push(c[c.length-1]); return out;
 }
 // ---------- Overpass ----------
-function boundaryQuery(){
-  return '[out:json][timeout:180];\nrel["boundary"="administrative"]["admin_level"="7"]["name"~"^(' + MUNIS.join('|') + ')$"](' + TOKYO_BBOX.join(',') + ');\nout geom;';
+function boundaryQuery(region){
+  region = region || REGIONS.tokyo;
+  return '[out:json][timeout:180];\nrel["boundary"="administrative"]["admin_level"="' + region.adminLevel + '"]["name"~"^(' + region.munis.join('|') + ')$"](' + region.bbox.join(',') + ');\nout geom;';
 }
-function chunkQuery(b){
+function chunkQuery(b, region){
+  region = region || REGIONS.tokyo;
   var bb = '(' + b.join(',') + ')';
   return '[out:json][timeout:180];\n(\n' +
-    '  nwr["leisure"="park"]["name"]' + bb + ';\n' +
+    '  nwr["leisure"="park"]' + (region.unnamed ? '' : '["name"]') + bb + ';\n' +
     '  nwr["leisure"="garden"]["name"]["access"!~"^(private|no)$"]' + bb + ';\n' +
-    '  way["name"~"緑道"]["building"!~"."]' + bb + ';\n' +
-    '  rel["name"~"緑道"]' + bb + ';\n' +
+    '  way["name"~"' + region.wayRe + '"]["building"!~"."]' + bb + ';\n' +
+    '  rel["name"~"' + region.wayRe + '"]' + bb + ';\n' +
     ');\nout geom;';
 }
 var HEADERS = {'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'};
@@ -130,10 +143,11 @@ function geomsOf(e){
   return out;
 }
 // Municipality polygons for point-in-polygon lookups.
-function buildMuniIndex(boundaryEls){
+function buildMuniIndex(boundaryEls, munis){
+  munis = munis || MUNIS;
   var idx = [], lines = [];
   boundaryEls.forEach(function(e){
-    var name = e.tags && e.tags.name; if(MUNIS.indexOf(name) < 0) return;
+    var name = e.tags && e.tags.name; if(munis.indexOf(name) < 0) return;
     var outer = (e.members || []).filter(function(m){ return m.type === 'way' && m.geometry && m.role !== 'inner'; })
       .map(function(m){ return m.geometry.filter(Boolean).map(function(p){ return [p.lat, p.lon]; }); });
     joinRings(outer).forEach(function(r){
@@ -161,39 +175,47 @@ function munisAt(pts, mi){
   });
   return hit;
 }
-function processData(boundaryEls, chunkEls){
-  var mi = buildMuniIndex(boundaryEls);
-  if(!mi.rings.length) throw new Error('没有拿到东京各区市的边界');
+function processData(boundaryEls, chunkEls, region){
+  region = region || REGIONS.tokyo;
+  var MU = region.munis, wayRx = new RegExp(region.wayRe), skipRx = region.exclude ? new RegExp(region.exclude) : null;
+  var mi = buildMuniIndex(boundaryEls, MU);
+  if(!mi.rings.length) throw new Error('没有拿到' + region.label + '各区的边界');
   var seen = new Set(), raw = [];
   chunkEls.forEach(function(els){ els.forEach(function(e){
     var key = e.type + '/' + e.id; if(seen.has(key)) return; seen.add(key);
-    var tags = e.tags || {}, name = tags.name; if(!name) return;
-    var kind = /緑道/.test(name) ? 'greenway' : (tags.leisure === 'garden' ? 'garden' : (tags.leisure === 'park' ? 'park' : null));
+    var tags = e.tags || {}, name = tags.name, unnamed = false;
+    if(!name){ if(!(region.unnamed && tags.leisure === 'park' && e.type !== 'node')) return; unnamed = true; name = ''; }
+    if(skipRx && skipRx.test(name)) return;
+    var kind = !unnamed && wayRx.test(name) ? 'greenway' : (tags.leisure === 'garden' ? 'garden' : (tags.leisure === 'park' ? 'park' : null));
     if(!kind) return;
     var g = geomsOf(e); if(!g.length) return;
     var all = []; g.forEach(function(x){ if(x.t === 'pt') all.push(x.c); else (x.r || x.c).forEach(function(p){ all.push(p); }); });
     var pts = extremes(all);
-    var munis = munisAt(pts, mi); if(!munis.length) return; // outside mainland Tokyo
+    var munis = munisAt(pts, mi); if(!munis.length) return; // outside the region's districts
     var alts = [tags['name:ja'], tags.alt_name, tags.official_name, tags.old_name, tags['name:zh']].filter(Boolean);
-    raw.push({osm:key, name:name, kind:kind, munis:munis, geoms:g, alts:alts, center:bboxCenter(pts)});
+    raw.push({osm:key, name:name, unnamed:unnamed, kind:kind, munis:munis, geoms:g, alts:alts, center:bboxCenter(pts)});
   }); });
   // Merge pieces of one place: same name and kind, near each other.
   var groups = new Map(), clusters = [];
   raw.sort(function(a, b){ return a.osm < b.osm ? -1 : 1; });
   raw.forEach(function(x){
-    var gk = x.kind + '|' + x.name, list = groups.get(gk); if(!list){ list = []; groups.set(gk, list); }
+    var gk = x.unnamed ? 'u|' + x.osm : x.kind + '|' + x.name, list = groups.get(gk); if(!list){ list = []; groups.set(gk, list); }
     var lim = x.kind === 'greenway' ? 2500 : 1200, target = null;
     for(var i = 0; i < list.length && !target; i++){ for(var j = 0; j < list[i].cs.length; j++){ if(hav(list[i].cs[j], x.center) < lim){ target = list[i]; break; } } }
-    if(!target){ target = {name:x.name, kind:x.kind, munis:[], geoms:[], alts:[], osm:x.osm, cs:[]}; list.push(target); clusters.push(target); }
+    if(!target){ target = {name:x.name, unnamed:x.unnamed, kind:x.kind, munis:[], geoms:[], alts:[], osm:x.osm, cs:[]}; list.push(target); clusters.push(target); }
     target.cs.push(x.center);
     x.munis.forEach(function(m){ if(target.munis.indexOf(m) < 0) target.munis.push(m); });
     x.alts.forEach(function(a){ if(target.alts.indexOf(a) < 0) target.alts.push(a); });
     target.geoms = target.geoms.concat(x.geoms);
   });
   var entities = clusters.map(function(cl){
-    var list = groups.get(cl.kind + '|' + cl.name);
-    var e = {id:(cl.kind === 'greenway' ? 'g|' : 'p|') + cl.name + (list.length > 1 ? '|' + cl.osm : ''), name:cl.name, kind:cl.kind,
-      munis:cl.munis.sort(function(a, b){ return MUNIS.indexOf(a) - MUNIS.indexOf(b); }), alts:cl.alts, osm:cl.osm};
+    var munis = cl.munis.sort(function(a, b){ return MU.indexOf(a) - MU.indexOf(b); });
+    var e;
+    if(cl.unnamed) e = {id:region.idPrefix + 'u|' + cl.osm, name:munis[0] + '·无名公园', unnamed:true, kind:'park', munis:munis, alts:[], osm:cl.osm};
+    else {
+      var list = groups.get(cl.kind + '|' + cl.name);
+      e = {id:region.idPrefix + (cl.kind === 'greenway' ? 'g|' : 'p|') + cl.name + (list.length > 1 ? '|' + cl.osm : ''), name:cl.name, kind:cl.kind, munis:munis, alts:cl.alts, osm:cl.osm};
+    }
     var area = 0, len = 0, longest = null, bigRing = null, allPts = [];
     cl.geoms.forEach(function(g){
       if(g.t === 'poly'){ var a = ringArea(g.r); area += a; if(!bigRing || a > bigRing.a) bigRing = {a:a, r:g.r}; }
@@ -211,10 +233,10 @@ function processData(boundaryEls, chunkEls){
     e.bb = all.length ? bboxOf(all) : null;
     return e;
   });
-  return {v:DATA_VER, fetchedAt:new Date().toISOString(), boundaries:mi.lines, entities:entities};
+  return {v:DATA_VER, region:region.id, fetchedAt:new Date().toISOString(), boundaries:mi.lines, entities:entities};
 }
 
 
-var api = {MUNIS_23:MUNIS_23, MUNIS_TAMA:MUNIS_TAMA, MUNIS:MUNIS, IS23:IS23, TOKYO_BBOX:TOKYO_BBOX, CHUNKS:CHUNKS, MAIN:MAIN, ENDPOINTS:ENDPOINTS, DATA_VER:DATA_VER, r5:r5, eq:eq, joinRings:joinRings, ringArea:ringArea, hav:hav, lineLen:lineLen, bboxOf:bboxOf, bboxCenter:bboxCenter, inRing:inRing, simplify:simplify, boundaryQuery:boundaryQuery, chunkQuery:chunkQuery, overpass:overpass, geomsOf:geomsOf, buildMuniIndex:buildMuniIndex, extremes:extremes, munisAt:munisAt, processData:processData};
+var api = {REGIONS:REGIONS, MUNIS_23:MUNIS_23, MUNIS_TAMA:MUNIS_TAMA, MUNIS:MUNIS, IS23:IS23, TOKYO_BBOX:TOKYO_BBOX, CHUNKS:CHUNKS, MAIN:MAIN, ENDPOINTS:ENDPOINTS, DATA_VER:DATA_VER, r5:r5, eq:eq, joinRings:joinRings, ringArea:ringArea, hav:hav, lineLen:lineLen, bboxOf:bboxOf, bboxCenter:bboxCenter, inRing:inRing, simplify:simplify, boundaryQuery:boundaryQuery, chunkQuery:chunkQuery, overpass:overpass, geomsOf:geomsOf, buildMuniIndex:buildMuniIndex, extremes:extremes, munisAt:munisAt, processData:processData};
 if(typeof module !== 'undefined' && module.exports) module.exports = api; else root.ParkData = api;
 })(typeof self !== 'undefined' ? self : this);

@@ -53,7 +53,12 @@ button{cursor:pointer}
   font-weight:700;font-size:17px;transform:rotate(-4deg);font-family:"Hiragino Mincho ProN","Noto Serif JP","Songti SC",serif}
 .brand h1{margin:0;font-size:17px;line-height:1.2;letter-spacing:.02em}
 .brand p{margin:0;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
-.icon-btn{grid-area:menu;border:1px solid var(--line);background:var(--surface-2);border-radius:10px;height:36px;padding:0 12px;font-size:13px}
+.actions{grid-area:menu;display:flex;gap:8px;align-items:center}
+.regions{display:flex;height:36px;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.regions button{border:0;background:var(--surface-2);padding:0 11px;font-size:13px}
+.regions button+button{border-left:1px solid var(--line)}
+.regions button[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg);font-weight:600}
+.icon-btn{border:1px solid var(--line);background:var(--surface-2);border-radius:10px;height:36px;padding:0 12px;font-size:13px}
 .progress{grid-area:prog;display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .pg{min-width:0}
 .pg .row{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
@@ -186,6 +191,9 @@ button{cursor:pointer}
   .brand h1{font-size:15px}
   .brand p{font-size:11px}
   .icon-btn{height:30px;padding:0 10px;font-size:12px}
+  .regions{height:30px}
+  .regions button{padding:0 9px;font-size:12px}
+  .actions{gap:6px}
   .pg .row{font-size:11px}
   .bar{height:4px;margin-top:2px}
   .sheet[data-open="false"] .controls{display:none}
@@ -226,10 +234,13 @@ body.immersive .toast{top:calc(env(safe-area-inset-top,0px) + 56px)}
   <header class="topbar" id="topbar">
     <div class="brand">
       <span class="seal" aria-hidden="true">園</span>
-      <div><h1>公园打卡</h1><p id="subtitle">东京都 23区＋多摩</p></div>
+      <div><h1>公园打卡</h1><p id="subtitle">—</p></div>
     </div>
     <div class="progress" id="progress"></div>
-    <button class="icon-btn" id="menuBtn" aria-expanded="false" aria-controls="menu"><span class="sdot" id="syncDot" hidden></span>数据</button>
+    <div class="actions">
+      <div class="regions" role="group" aria-label="城市"><button type="button" data-r="tokyo">东京</button><button type="button" data-r="ningbo">宁波</button></div>
+      <button class="icon-btn" id="menuBtn" aria-expanded="false" aria-controls="menu"><span class="sdot" id="syncDot" hidden></span>数据</button>
+    </div>
   </header>
 
   <div class="mapwrap">
@@ -288,7 +299,7 @@ body.immersive .toast{top:calc(env(safe-area-inset-top,0px) + 56px)}
         <input type="file" id="importFile" accept="application/json,.json" hidden>
         <button class="btn primary" id="fpBtn">从一生足迹导入</button>
         <input type="file" id="fpFile" accept=".csv,text/csv" multiple hidden>
-        <h2 class="sub">各区市进度</h2>
+        <h2 class="sub" id="muniHead">各区进度</h2>
         <div class="muni-list" id="muniList"></div>
       </div>
     </div>
@@ -307,7 +318,7 @@ body.immersive .toast{top:calc(env(safe-area-inset-top,0px) + 56px)}
       <div class="card" role="status">
         <div class="spinner" id="spin"></div>
         <h2 id="loadTitle">正在准备地图</h2>
-        <p id="loadText">第一次打开需要从 OpenStreetMap 下载全东京的公园数据。</p>
+        <p id="loadText">第一次打开需要下载公园数据。</p>
         <div class="bar loadbar" id="loadBar" hidden><i></i></div>
         <div class="btns" id="loadBtns" hidden><button class="btn primary" id="retryBtn">重试</button></div>
       </div>
@@ -322,6 +333,7 @@ body.immersive .toast{top:calc(env(safe-area-inset-top,0px) + 56px)}
 
 // Data download and processing live in parkdata.js (also used by the monthly build on GitHub).
 var P = window.ParkData;
+var REGIONS = P.REGIONS;
 var MUNIS_23 = P.MUNIS_23;
 var MUNIS_TAMA = P.MUNIS_TAMA;
 var MUNIS = P.MUNIS;
@@ -351,6 +363,9 @@ var munisAt = P.munisAt;
 var processData = P.processData;
 var KIND_LABEL = {park:'公园', greenway:'绿道', garden:'庭园'};
 var K = {rec:'tpm.checkins.v1', seed:'tpm.seeded.v1', base:'tpm.base.v1', ui:'tpm.ui.v2', view:'tpm.view.v1'};
+// Current city. Tokyo keeps the original storage keys; other regions get a suffix.
+var REGION = REGIONS[(function(){ try{ return localStorage.getItem('tpm.region'); }catch(e){ return null; } })()] || REGIONS.tokyo;
+function rk(k){ return REGION.id === 'tokyo' ? k : k + '.' + REGION.id; }
 // Parks to pre-mark as visited on first load (empty: everyone starts from a blank map).
 var SEED_NAMES = [];
 var ZH_JA = {'驹':'駒','泽':'沢','绿':'緑','园':'園','芦':'蘆','并':'並','儿':'児','广':'広','场':'場','冈':'岡','桥':'橋','乌':'烏','带':'帯',
@@ -388,7 +403,7 @@ var DB = (function(){
 try{ localStorage.removeItem('tpm.data.v1'); localStorage.removeItem('tpm.data.v2'); }catch(e){}
 
 var DATA = null, BYID = new Map(), LAYERS = new Map(), SHOWN = new Map(), REC = S.get(K.rec, {}) || {}, me = null, meMarker = null, currentId = null;
-var ui = S.get(K.ui, {}) || {};
+var ui = S.get(rk(K.ui), {}) || {};
 var filt = {muni: ui.muni || 'all', kind: ui.kind || 'all', status: ui.status || 'all', sort: ui.sort === 'dist' ? 'size' : (ui.sort || 'size'), q: ''};
 var listLimit = 200;
 
@@ -398,7 +413,9 @@ function today(){ var d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezon
 var TOMB = S.get('tpm.tomb', {}) || {}, DIRTY = S.get('tpm.dirty', {}) || {}; // deleted ids -> time; ids waiting for upload
 function saveRec(){ if(!S.set(K.rec, REC)) toast('打卡记录没能保存到浏览器，请检查是否开了无痕模式'); S.set('tpm.tomb', TOMB); S.set('tpm.dirty', DIRTY); }
 function touch(id){ DIRTY[id] = 1; if(REC[id]){ REC[id].u = Date.now(); delete TOMB[id]; } else TOMB[id] = Date.now(); if(window.syncSoon) window.syncSoon(); }
-function saveUi(){ S.set(K.ui, {muni:filt.muni, kind:filt.kind, status:filt.status, sort:filt.sort}); }
+function saveUi(){ S.set(rk(K.ui), {muni:filt.muni, kind:filt.kind, status:filt.status, sort:filt.sort}); }
+// Custom names: an unnamed park shows the name its visitor gave it.
+function dispName(e){ var r = REC[e.id]; return (r && r.title) || e.name; }
 function isMobile(){ return window.innerWidth < 900; }
 
 var toastTimer = null;
@@ -429,10 +446,10 @@ var hasGL = false;
 try{ var cv = document.createElement('canvas'); hasGL = !!(window.maplibregl && L.maplibreGL && (cv.getContext('webgl2') || cv.getContext('webgl'))); }catch(e){ hasGL = false; }
 if(hasGL && window.pmtiles){ try{ var pmProto = new pmtiles.Protocol(); maplibregl.addProtocol('pmtiles', pmProto.tile); }catch(e){} }
 var ofmAttr = '<a href="https://openfreemap.org">OpenFreeMap</a> &copy; <a href="https://www.openmaptiles.org/">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
-function jaLabels(style){ // OpenFreeMap labels default to Latin names; show Japanese names instead
+function jaLabels(style){ // OpenFreeMap labels default to Latin names; show the local name instead (Japanese in Tokyo, Chinese in Ningbo)
   (style.layers || []).forEach(function(l){
     var tf = l.layout && l.layout['text-field'];
-    if(tf && JSON.stringify(tf).indexOf('name') >= 0) l.layout['text-field'] = ['coalesce', ['get', 'name:ja'], ['get', 'name'], ['get', 'name_en']];
+    if(tf && JSON.stringify(tf).indexOf('name') >= 0) l.layout['text-field'] = ['coalesce', ['get', 'name'], ['get', 'name_en']];
   });
   return style;
 }
@@ -455,7 +472,8 @@ var bases = hasGL ? {
   '浅色': gsi('pale', 'png'),
   '标准': gsi('std', 'png'),
   '深色': gsi('pale', 'png', {className:'tiles-dark'}),
-  '航拍': gsi('seamlessphoto', 'jpg')
+  '航拍': gsi('seamlessphoto', 'jpg'),
+  'OSM': L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19, attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> 贡献者'})
 };
 map.attributionControl.addAttribution('公园数据 &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> 贡献者');
 var darkPref = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -468,9 +486,10 @@ var OSM_LINK = '<a href="https://www.openstreetmap.org/copyright">OpenStreetMap<
 var CREDITS = {
   ofm:  {short:'© ' + OSM_LINK + ' · OpenFreeMap', full:'底图 <a href="https://openfreemap.org">OpenFreeMap</a> © <a href="https://www.openmaptiles.org/">OpenMapTiles</a> © ' + OSM_LINK + ' 贡献者'},
   gsiv: {short:'© 国土地理院 · ' + OSM_LINK, full:'底图 <a href="https://maps.gsi.go.jp/development/ichiran.html">国土地理院 地理院地図Vector</a>'},
-  gsir: {short:'© 国土地理院 · ' + OSM_LINK, full:'底图 <a href="https://maps.gsi.go.jp/development/ichiran.html">地理院タイル</a>'}
+  gsir: {short:'© 国土地理院 · ' + OSM_LINK, full:'底图 <a href="https://maps.gsi.go.jp/development/ichiran.html">地理院タイル</a>'},
+  osm:  {short:'© ' + OSM_LINK, full:'底图 © ' + OSM_LINK + ' 贡献者'}
 };
-function creditKey(name){ return /地理院（|航拍/.test(name) || !hasGL ? 'gsir' : (name === '地理院' ? 'gsiv' : 'ofm'); }
+function creditKey(name){ if(name === 'OSM') return 'osm'; return /地理院（|航拍/.test(name) || !hasGL ? 'gsir' : (name === '地理院' ? 'gsiv' : 'ofm'); }
 var attrCtl = L.control({position:'bottomleft'});
 attrCtl.onAdd = function(){
   var d = L.DomUtil.create('div', 'attr leaflet-control');
@@ -490,9 +509,9 @@ map.on('baselayerchange', function(e){ baseName = e.name; setCredit(); });
 map.on('baselayerchange', function(e){ S.set(K.base, e.name); });
 map.createPane('shapes').style.zIndex = 410;
 map.createPane('dots').style.zIndex = 420;
-var view = S.get(K.view, null);
-if(view && view.c && view.z) map.setView(view.c, view.z); else map.fitBounds([[35.55, 139.0], [35.85, 139.92]]);
-map.on('moveend', function(){ var c = map.getCenter(); S.set(K.view, {c:[r5(c.lat), r5(c.lng)], z:map.getZoom()}); });
+var view = S.get(rk(K.view), null);
+if(view && view.c && view.z) map.setView(view.c, view.z); else map.fitBounds(REGION.view);
+map.on('moveend', function(){ var c = map.getCenter(); S.set(rk(K.view), {c:[r5(c.lat), r5(c.lng)], z:map.getZoom()}); });
 var boundaryLayer = L.layerGroup().addTo(map), shapeLayer = L.layerGroup().addTo(map), dotLayer = L.layerGroup().addTo(map);
 var popup = L.popup({maxWidth:290, autoPanPaddingTopLeft:[16, 16], autoPanPaddingBottomRight:[16, 24]});
 var SHAPE_ZOOM = 14;
@@ -567,7 +586,7 @@ function openEntity(id, fly){
 }
 function popupNode(e){
   var r = REC[e.id], root = el('div', 'pop');
-  root.appendChild(el('h3', null, e.name));
+  root.appendChild(el('h3', null, dispName(e)));
   root.appendChild(el('p', 'meta', KIND_LABEL[e.kind] + ' · ' + muniLabel(e) + ' · ' + fmtSize(e) + (me ? ' · 距你 ' + fmtDist(hav(me, e.center)) : '')));
   if(r){
     var row = el('div', 'stamp-row'); row.appendChild(el('span', 'stamp', '済'));
@@ -575,18 +594,23 @@ function popupNode(e){
     if(r.note) t.appendChild(el('span', null, r.note)); else if(!r.date) t.appendChild(el('span', null, '日期没有记录，可以在下面补上'));
     row.appendChild(t); root.appendChild(row);
   }
+  var tIn = null;
+  if(e.unnamed){
+    var tl = el('label', null, '名字（地图数据里没有名字，可以自己起一个）'); tl.setAttribute('for', 'popTitle'); root.appendChild(tl);
+    tIn = el('input'); tIn.id = 'popTitle'; tIn.type = 'text'; tIn.maxLength = 40; tIn.placeholder = '比如 小区门口的公园'; tIn.value = (r && r.title) || ''; tIn.style.marginBottom = '8px'; root.appendChild(tIn);
+  }
   var lab = el('label', null, '日期'); lab.setAttribute('for', 'popDate'); root.appendChild(lab);
   var d = el('input'); d.type = 'date'; d.id = 'popDate'; d.value = (r && r.date) || today(); d.max = today(); root.appendChild(d);
   var n = el('textarea'); n.id = 'popNote'; n.placeholder = '备注（可选），比如 和谁一起、看到了什么'; n.value = (r && r.note) || ''; root.appendChild(n);
   var btns = el('div', 'btns');
   var ok = el('button', 'btn primary', r ? '保存修改' : '打卡'); ok.type = 'button';
-  ok.addEventListener('click', function(){ checkIn(e, d.value, n.value); });
+  ok.addEventListener('click', function(){ checkIn(e, d.value, n.value, tIn ? tIn.value : null); });
   btns.appendChild(ok);
   if(r){
     var un = el('button', 'btn warn', '取消打卡'); un.type = 'button'; var armed = false;
     un.addEventListener('click', function(){
       if(!armed){ armed = true; un.textContent = '再点一次确认'; setTimeout(function(){ armed = false; un.textContent = '取消打卡'; }, 3000); return; }
-      delete REC[e.id]; touch(e.id); saveRec(); afterChange(e); toast('已取消：' + e.name);
+      var nm = dispName(e); delete REC[e.id]; touch(e.id); saveRec(); afterChange(e); toast('已取消：' + nm);
     });
     btns.appendChild(un);
   }
@@ -598,11 +622,13 @@ function popupNode(e){
   L.DomEvent.disableClickPropagation(root);
   return root;
 }
-function checkIn(e, date, note){
+function checkIn(e, date, note, title){
   var was = !!REC[e.id];
-  REC[e.id] = {date: date || null, note: (note || '').trim()}; touch(e.id);
+  REC[e.id] = {date: date || null, note: (note || '').trim()};
+  if(title && title.trim()) REC[e.id].title = title.trim();
+  touch(e.id);
   saveRec(); afterChange(e);
-  toast((was ? '已更新：' : '打卡成功：') + e.name);
+  toast((was ? '已更新：' : '打卡成功：') + dispName(e));
 }
 function afterChange(e){
   restyle(e); renderProgress(); renderList(); renderMenu();
@@ -613,8 +639,7 @@ function afterChange(e){
 function countBy(test){ var t = 0, d = 0; DATA.entities.forEach(function(e){ if(test(e)){ t++; if(REC[e.id]) d++; } }); return [d, t]; }
 function inMuniFilter(e, f){
   if(f === 'all') return true;
-  if(f === 'g:23') return e.munis.some(function(m){ return IS23[m]; });
-  if(f === 'g:tama') return e.munis.some(function(m){ return !IS23[m]; });
+  if(f.slice(0, 2) === 'g:'){ var g = REGION.groups[+f.slice(2)]; return !!g && e.munis.some(function(m){ return g[1].indexOf(m) >= 0; }); }
   return e.munis.indexOf(f) >= 0;
 }
 function pgNode(label, dt){
@@ -625,22 +650,20 @@ function pgNode(label, dt){
 }
 function renderProgress(){
   var box = $('#progress'); box.textContent = '';
-  var f = filt.muni, sel = f === 'all' ? null : (f === 'g:23' ? '23区' : (f === 'g:tama' ? '多摩' : f));
-  box.appendChild(pgNode('全东京', countBy(function(){ return true; })));
+  var f = filt.muni, grp = f.slice(0, 2) === 'g:' ? REGION.groups[+f.slice(2)] : null, sel = f === 'all' ? null : (grp ? grp[0] : f);
+  box.appendChild(pgNode(REGION.all, countBy(function(){ return true; })));
   if(sel) box.appendChild(pgNode(sel, countBy(function(e){ return inMuniFilter(e, f); })));
-  else {
-    box.appendChild(pgNode('23区', countBy(function(e){ return inMuniFilter(e, 'g:23'); })));
-    box.appendChild(pgNode('多摩', countBy(function(e){ return inMuniFilter(e, 'g:tama'); })));
-  }
-  box.classList.toggle('three', !sel);
+  else if(REGION.groups.length > 1) REGION.groups.forEach(function(g, i){ box.appendChild(pgNode(g[0], countBy(function(e){ return inMuniFilter(e, 'g:' + i); }))); });
+  else if(REGION.unnamed){ box.appendChild(pgNode('有名字的', countBy(function(e){ return !e.unnamed; }))); box.appendChild(pgNode('无名公园', countBy(function(e){ return !!e.unnamed; }))); }
+  box.classList.toggle('three', box.children.length === 3);
   var all = countBy(function(){ return true; });
   var pct = all[1] ? (Math.round(all[0] / all[1] * 1000) / 10) : 0;
-  $('#subtitle').textContent = '东京 23区＋多摩 · 已打卡 ' + all[0] + ' 处 · ' + pct + '%';
+  $('#subtitle').textContent = (isMobile() ? '' : REGION.full + ' · ') + '已打卡 ' + all[0] + ' 处 · ' + pct + '%';
   $('#miniText').innerHTML = ''; $('#miniText').appendChild(el('b', null, String(all[0]))); $('#miniText').appendChild(document.createTextNode(' / ' + all[1] + ' · ' + pct + '%'));
 }
 
 // ---------- List ----------
-function normQ(s){ return (s || '').toLowerCase().replace(/\s+/g, '').split('').map(function(ch){ return ZH_JA[ch] || ch; }).join(''); }
+function normQ(s){ s = (s || '').toLowerCase().replace(/\s+/g, ''); return REGION.id === 'tokyo' ? s.split('').map(function(ch){ return ZH_JA[ch] || ch; }).join('') : s; }
 function normName(s){ return (s || '').replace(/\s+/g, '').replace(/^(東京都立|都立|国営|[^\s]{1,4}[区市町村]立|区立|市立)/, '').replace(/芦花/g, '蘆花'); }
 function filtered(){
   var q = normQ(filt.q).replace(/芦/g, '蘆');
@@ -649,13 +672,13 @@ function filtered(){
     if(filt.kind !== 'all' && e.kind !== filt.kind) return false;
     if(filt.status === 'done' && !REC[e.id]) return false;
     if(filt.status === 'todo' && REC[e.id]) return false;
-    if(q){ var hay = normQ(e.name + ' ' + e.alts.join(' ') + ' ' + e.munis.join(' ')).replace(/芦/g, '蘆'); if(hay.indexOf(q) < 0) return false; }
+    if(q){ var hay = normQ(dispName(e) + ' ' + e.name + ' ' + e.alts.join(' ') + ' ' + e.munis.join(' ')).replace(/芦/g, '蘆'); if(hay.indexOf(q) < 0) return false; }
     return true;
   });
   var s = filt.sort; if(s === 'dist' && !me) s = 'size';
   var dist = s === 'dist' ? new Map(arr.map(function(e){ return [e.id, hav(me, e.center)]; })) : null;
   arr.sort(function(a, b){
-    if(s === 'name') return a.name.localeCompare(b.name, 'ja');
+    if(s === 'name') return dispName(a).localeCompare(dispName(b), REGION.id === 'tokyo' ? 'ja' : 'zh');
     if(s === 'dist') return dist.get(a.id) - dist.get(b.id);
     if(s === 'recent'){ var ra = REC[a.id], rb = REC[b.id]; if(!!ra !== !!rb) return ra ? -1 : 1; return ((rb && rb.date) || '').localeCompare((ra && ra.date) || ''); }
     return ((b.area || 0) + (b.len || 0) * 20) - ((a.area || 0) + (a.len || 0) * 20);
@@ -672,7 +695,7 @@ function renderList(){
     var li = el('li'), b = el('button', 'item'); b.type = 'button'; b.dataset.id = e.id;
     var r = REC[e.id];
     b.appendChild(el('span', 'dot' + (e.kind === 'greenway' ? ' way' : '') + (r ? ' done' : '')));
-    var txt = el('span', 'txt'); txt.appendChild(el('strong', null, e.name));
+    var txt = el('span', 'txt'); txt.appendChild(el('strong', null, dispName(e)));
     var meta = KIND_LABEL[e.kind] + ' · ' + e.munis.join('/') + ' · ' + fmtSize(e).replace('全长', '').replace('约 ', '');
     if(me) meta += ' · ' + fmtDist(hav(me, e.center));
     txt.appendChild(el('small', null, meta)); b.appendChild(txt);
@@ -700,11 +723,14 @@ $('#sheetToggle').addEventListener('click', function(){ setSheet($('#sheet').dat
 var qTimer = null;
 $('#q').addEventListener('input', function(){ var v = this.value; clearTimeout(qTimer); qTimer = setTimeout(function(){ filt.q = v; resetList(); }, 150); });
 $('#q').addEventListener('focus', function(){ if(isMobile()) setSheet(true); });
-(function buildMuniSelect(){
+function buildMuniSelect(){
   var s = $('#fMuni'); s.textContent = '';
-  [['all', '全东京'], ['g:23', '23区全部'], ['g:tama', '多摩全部']].forEach(function(o){ var op = el('option', null, o[1]); op.value = o[0]; s.appendChild(op); });
-  [['23区', MUNIS_23], ['多摩', MUNIS_TAMA]].forEach(function(g){ var og = el('optgroup'); og.label = g[0]; g[1].forEach(function(m){ var op = el('option', null, m); op.value = m; og.appendChild(op); }); s.appendChild(og); });
-})();
+  var top = [['all', REGION.all]]; if(REGION.groups.length > 1) REGION.groups.forEach(function(g, i){ top.push(['g:' + i, g[0] + '全部']); });
+  top.forEach(function(o){ var op = el('option', null, o[1]); op.value = o[0]; s.appendChild(op); });
+  REGION.groups.forEach(function(g){ var og = el('optgroup'); og.label = g[0]; g[1].forEach(function(m){ var op = el('option', null, m); op.value = m; og.appendChild(op); }); s.appendChild(og); });
+  s.value = filt.muni; if(s.value !== filt.muni){ filt.muni = 'all'; s.value = 'all'; }
+}
+buildMuniSelect();
 [['#fMuni', 'muni'], ['#fKind', 'kind'], ['#fStatus', 'status'], ['#fSort', 'sort']].forEach(function(p){
   var s = $(p[0]); s.value = filt[p[1]]; if(s.value !== filt[p[1]]){ filt[p[1]] = 'all'; s.value = 'all'; }
   s.addEventListener('change', function(){
@@ -733,7 +759,7 @@ function locate(fromSort){
     if(DATA){
       var best = null;
       DATA.entities.forEach(function(e){ if(REC[e.id]) return; var d = hav(me, e.center); if(!best || d < best.d) best = {e:e, d:d}; });
-      if(best) toast('离你最近的未打卡：' + best.e.name + '（' + fmtDist(best.d) + '）');
+      if(best) toast('离你最近的未打卡：' + dispName(best.e) + '（' + fmtDist(best.d) + '）');
       renderList();
     }
   }, function(err){
@@ -759,13 +785,14 @@ try{ if(sessionStorage.getItem('tpm.immersive')) setImmersive(true); }catch(e){}
 function renderMenu(){
   if(!DATA) return;
   var c = {park:0, greenway:0, garden:0}; DATA.entities.forEach(function(e){ c[e.kind]++; });
-  $('#mData').textContent = '公园 ' + c.park.toLocaleString() + ' · 绿道 ' + c.greenway + ' · 庭园 ' + c.garden;
+  var un = DATA.entities.filter(function(e){ return e.unnamed; }).length;
+  $('#mData').textContent = REGION.label + '：公园 ' + c.park.toLocaleString() + (un ? '（其中无名 ' + un + '）' : '') + ' · 绿道 ' + c.greenway + ' · 庭园 ' + c.garden;
   $('#mTime').textContent = new Date(DATA.fetchedAt).toLocaleString('zh-CN', {hour12:false});
   $('#mRec').textContent = Object.keys(REC).length + ' 处';
   var box = $('#muniList'); box.textContent = '';
-  var stats = {}; MUNIS.forEach(function(m){ stats[m] = [0, 0]; });
-  DATA.entities.forEach(function(e){ e.munis.forEach(function(m){ stats[m][1]++; if(REC[e.id]) stats[m][0]++; }); });
-  [['23区', MUNIS_23], ['多摩', MUNIS_TAMA]].forEach(function(g){
+  var stats = {}; REGION.munis.forEach(function(m){ stats[m] = [0, 0]; });
+  DATA.entities.forEach(function(e){ e.munis.forEach(function(m){ if(stats[m]){ stats[m][1]++; if(REC[e.id]) stats[m][0]++; } }); });
+  REGION.groups.forEach(function(g){
     box.appendChild(el('h3', null, g[0]));
     g[1].slice().sort(function(a, b){ var x = stats[a], y = stats[b]; return (y[1] ? y[0]/y[1] : 0) - (x[1] ? x[0]/x[1] : 0) || y[0] - x[0]; }).forEach(function(m){
       var b = el('button', 'muni-row'); b.type = 'button'; b.dataset.m = m; b.appendChild(pgNode(m, stats[m])); box.appendChild(b);
@@ -782,7 +809,7 @@ map.on('click', function(){ $('#menu').hidden = true; $('#menuBtn').setAttribute
 $('#refreshBtn').addEventListener('click', function(){ $('#menu').hidden = true; loadData(true); });
 $('#exportBtn').addEventListener('click', function(){
   var out = {app:'park-checkin-map', version:1, exportedAt:new Date().toISOString(), records:{}};
-  Object.keys(REC).forEach(function(id){ var e = BYID.get(id); out.records[id] = Object.assign({name: e ? e.name : id.split('|')[1]}, REC[id]); });
+  Object.keys(REC).forEach(function(id){ var e = BYID.get(id); out.records[id] = Object.assign({name: e ? dispName(e) : id.split('|')[1]}, REC[id]); });
   var blob = new Blob([JSON.stringify(out, null, 2)], {type:'application/json'});
   var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = '公园打卡记录-' + today() + '.json';
   document.body.appendChild(a); a.click(); setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 1500);
@@ -795,7 +822,7 @@ $('#importFile').addEventListener('change', function(){
   rd.onload = function(){
     try{
       var j = JSON.parse(rd.result), recs = j.records || j, n = 0;
-      Object.keys(recs).forEach(function(id){ var r = recs[id]; if(r && typeof r === 'object'){ REC[id] = {date: r.date || null, note: r.note || ''}; touch(id); n++; } });
+      Object.keys(recs).forEach(function(id){ var r = recs[id]; if(r && typeof r === 'object'){ REC[id] = {date: r.date || null, note: r.note || ''}; if(r.title) REC[id].title = r.title; touch(id); n++; } });
       if(DATA) migrateRecords();
       saveRec(); if(DATA){ DATA.entities.forEach(restyle); renderProgress(); renderList(); renderMenu(); }
       toast('已导入 ' + n + ' 条打卡记录');
@@ -889,7 +916,7 @@ $('#fpFile').addEventListener('change', function(){
   setTimeout(function(){
     Promise.all(files.map(function(f){ return f.text(); })).then(function(texts){
       var pts = [];
-      texts.forEach(function(t){ pts = pts.concat(parseFootprint(t, TOKYO_BBOX)); });
+      texts.forEach(function(t){ pts = pts.concat(parseFootprint(t, REGION.bbox)); });
       pts = cleanFootprint(pts);
       fpResults = matchFootprint(pts);
       $('#loading').hidden = true; input.value = '';
@@ -903,13 +930,13 @@ $('#fpFile').addEventListener('change', function(){
 function showFootprint(nPts){
   var ul = $('#fpList'); ul.textContent = '';
   var fresh = fpResults.filter(function(r){ return !REC[r.e.id]; }).length;
-  $('#fpSummary').textContent = '东京范围内有 ' + nPts.toLocaleString() + ' 个步行足迹点和照片点，对上了 ' + fpResults.length + ' 处公园和绿道，其中 ' + fresh + ' 处还没打卡。打卡日期用第一次去的那天。';
+  $('#fpSummary').textContent = REGION.all + '范围内有 ' + nPts.toLocaleString() + ' 个步行足迹点和照片点，对上了 ' + fpResults.length + ' 处公园和绿道，其中 ' + fresh + ' 处还没打卡。打卡日期用第一次去的那天。';
   if(!fpResults.length){ ul.appendChild(el('li', 'empty', '没有对上的地方')); }
   fpResults.forEach(function(r, i){
     var li = el('li'), lab = el('label'), cb = el('input'); cb.type = 'checkbox'; cb.id = 'fp' + i; cb.dataset.i = i;
     var had = REC[r.e.id]; cb.checked = !had || !had.date;
     lab.setAttribute('for', cb.id); lab.appendChild(cb);
-    var t = el('span'), s = el('strong', null, r.e.name);
+    var t = el('span'), s = el('strong', null, dispName(r.e));
     if(had) s.appendChild(el('span', 'tag', had.date ? '已打卡' : '已打卡，补上日期'));
     t.appendChild(s);
     t.appendChild(el('small', null, KIND_LABEL[r.e.kind] + ' · ' + r.e.munis.join('/') + ' · 去过 ' + r.days + ' 天' + (r.photos ? ' · ' + r.photos + ' 张照片' : '') + ' · 首次 ' + r.first.replace(/-/g, '.') + (r.days > 1 ? ' · 最近 ' + r.last.replace(/-/g, '.') : '')));
@@ -927,7 +954,7 @@ $('#fpApply').addEventListener('click', function(){
   document.querySelectorAll('#fpList input').forEach(function(c){
     if(!c.checked) return; var r = fpResults[+c.dataset.i], old = REC[r.e.id];
     var note = '足迹识别：去过 ' + r.days + ' 天' + (r.photos ? '，' + r.photos + ' 张照片' : '');
-    REC[r.e.id] = {date: (old && old.date) || r.first, note: old && old.note && old.note !== '之前去过' ? old.note : note}; touch(r.e.id); n++;
+    REC[r.e.id] = {date: (old && old.date) || r.first, note: old && old.note && old.note !== '之前去过' ? old.note : note}; if(old && old.title) REC[r.e.id].title = old.title; touch(r.e.id); n++;
   });
   saveRec(); DATA.entities.forEach(restyle); renderProgress(); renderList(); renderMenu();
   $('#fpPanel').hidden = true; toast('已根据足迹打卡 ' + n + ' 处');
@@ -936,6 +963,7 @@ $('#fpApply').addEventListener('click', function(){
 // ---------- Records from older versions; seed visited parks ----------
 // Old ids were "p|名前"; if that name now exists in several places, attach the record to the one in 世田谷/杉並.
 function migrateRecords(){
+  if(REGION.id !== 'tokyo') return;
   var moved = 0;
   Object.keys(REC).forEach(function(id){
     if(BYID.has(id)) return;
@@ -974,38 +1002,44 @@ function applyData(data, fit){
   DATA = data; BYID = new Map(); data.entities.forEach(function(e){ BYID.set(e.id, e); });
   migrateRecords(); seed(); drawAll(); renderProgress(); renderList(); renderMenu();
   if(window.syncSoon && Object.keys(DIRTY).length) window.syncSoon();
-  if(fit) map.fitBounds([[35.55, 139.0], [35.85, 139.92]]);
+  if(fit) map.fitBounds(REGION.view);
 }
 var loading = false;
 // Normal path: data/parks.json, built monthly on GitHub (one request, a few seconds).
 // Fallback (no prebuilt file, e.g. the page opened as a local file): query Overpass from the browser.
 function fetchPrebuilt(){
-  return fetch('data/version.json', {cache:'no-cache'}).then(function(r){ if(!r.ok) throw new Error('no prebuilt data'); return r.json(); })
+  return fetch('data/' + REGION.versionFile, {cache:'no-cache'}).then(function(r){ if(!r.ok) throw new Error('no prebuilt data'); return r.json(); })
     .then(function(ver){ return {ver:ver, get:function(){
-      return fetch('data/parks.json?v=' + encodeURIComponent(ver.fetchedAt)).then(function(r){ if(!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+      return fetch('data/' + REGION.file + '?v=' + encodeURIComponent(ver.fetchedAt)).then(function(r){ if(!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
     }}; });
 }
+var loadToken = 0; // bumped when switching city, so a late download for the old city is ignored
 function loadData(force){
   if(loading) return;
-  (force ? Promise.resolve(null) : DB.get('data')).then(function(cached){
+  var tk = loadToken, R0 = REGION;
+  (force ? Promise.resolve(null) : DB.get(R0.dbKey)).then(function(cached){
+    if(tk !== loadToken) return;
     var have = !!(cached && cached.v === DATA_VER && cached.entities && cached.entities.length);
     if(have) applyData(cached, false);
     loading = true;
     return fetchPrebuilt().then(function(pb){
       if(pb.ver.v !== DATA_VER) throw new Error('prebuilt data has another format');
       if(have && pb.ver.fetchedAt <= cached.fetchedAt){ loading = false; if(force) toast('公园数据已经是最新的（' + cached.fetchedAt.slice(0, 10) + '）'); return; }
-      if(!have && !DATA) showLoading('正在加载公园数据', '全东京约 ' + (pb.ver.count || 0).toLocaleString() + ' 处公园和绿道，几秒钟就好。');
+      if(tk !== loadToken){ loading = false; return; }
+      if(!have && !DATA) showLoading('正在加载公园数据', R0.all + '约 ' + (pb.ver.count || 0).toLocaleString() + ' 处公园和绿道，几秒钟就好。');
       return pb.get().then(function(data){
         if(data.v !== DATA_VER || !data.entities || !data.entities.length) throw new Error('prebuilt data is empty');
-        return DB.set('data', data).then(function(ok){
+        return DB.set(R0.dbKey, data).then(function(ok){
+          if(tk !== loadToken){ loading = false; return; }
           $('#loading').hidden = true; loading = false;
           var first = !DATA;
           applyData(data, first && !view);
-          toast(first ? '已加载全东京 ' + data.entities.length.toLocaleString() + ' 处公园和绿道' + (ok ? '' : '，但浏览器存储不够，下次打开需要重新下载') : '公园数据已更新到 ' + data.fetchedAt.slice(0, 10));
+          toast(first ? '已加载' + R0.all + ' ' + data.entities.length.toLocaleString() + ' 处公园和绿道' + (ok ? '' : '，但浏览器存储不够，下次打开需要重新下载') : '公园数据已更新到 ' + data.fetchedAt.slice(0, 10));
         });
       });
     }).catch(function(err){
       loading = false;
+      if(tk !== loadToken) return;
       if(have && !force) return; // keep using the cached data
       loadFromOverpass(force, true);
     });
@@ -1013,16 +1047,17 @@ function loadData(force){
 }
 function loadFromOverpass(force, resume){
   if(loading) return; loading = true;
+  var tk = loadToken, R0 = REGION, pre = R0.id === 'tokyo' ? 'chunk:' : R0.dbKey + ':chunk:';
   var cachedP = Promise.resolve(null);
   cachedP.then(function(cached){
-    if(cached && cached.v === DATA_VER && cached.entities && cached.entities.length){ loading = false; applyData(cached, false); return; }
-    var steps = [{key:'chunk:boundary', label:'东京各区市边界', q:boundaryQuery()}].concat(CHUNKS.map(function(c, i){ return {key:'chunk:' + i, label:c.label, q:chunkQuery(c.b)}; }));
-    showLoading('正在下载全东京的公园数据', '分 ' + steps.length + ' 次从 OpenStreetMap 下载，一共大约 3 到 8 分钟，只需要下载这一次。中途断了的话，点重试会从断开的地方继续。');
+    var steps = [{key:pre + 'boundary', label:R0.label + '各区边界', q:boundaryQuery(R0)}].concat(R0.chunks.map(function(c, i){ return {key:pre + i, label:c.label, q:chunkQuery(c.b, R0)}; }));
+    showLoading('正在下载' + R0.all + '的公园数据', '分 ' + steps.length + ' 次从 OpenStreetMap 下载，一共大约 3 到 8 分钟，只需要下载这一次。中途断了的话，点重试会从断开的地方继续。');
     var results = [], i = 0;
     function step(){
       if(i >= steps.length) return Promise.resolve();
       var s = steps[i], n = i + 1;
       setLoadProgress(i, steps.length, '正在下载 ' + n + '/' + steps.length + '：' + s.label);
+      if(tk !== loadToken) return Promise.reject(new Error('switched'));
       return (force && !resume ? Promise.resolve(undefined) : DB.get(s.key)).then(function(saved){
         if(saved) return saved;
         return overpass(s.q).then(function(j){ var els = j.elements || []; return DB.set(s.key, els).then(function(){ return els; }); });
@@ -1033,16 +1068,18 @@ function loadFromOverpass(force, resume){
       setLoadProgress(steps.length, steps.length, '正在整理数据');
       return new Promise(function(r){ setTimeout(r, 30); });
     }).then(function(){
-      var data = processData(results[0], results.slice(1));
+      var data = processData(results[0], results.slice(1), R0);
       if(!data.entities.length) throw new Error('数据服务器没有返回任何公园');
-      return DB.set('data', data).then(function(ok){
+      return DB.set(R0.dbKey, data).then(function(ok){
+        if(tk !== loadToken){ loading = false; return; }
         steps.forEach(function(s){ DB.del(s.key); });
         $('#loading').hidden = true; loading = false;
         applyData(data, !DATA && !view);
-        toast('已加载全东京 ' + data.entities.length.toLocaleString() + ' 处公园和绿道' + (ok ? '' : '，但浏览器存储不够，下次打开需要重新下载'));
+        toast('已加载' + R0.all + ' ' + data.entities.length.toLocaleString() + ' 处公园和绿道' + (ok ? '' : '，但浏览器存储不够，下次打开需要重新下载'));
       });
     }).catch(function(err){
       loading = false;
+      if(tk !== loadToken) return;
       if(DATA){ $('#loading').hidden = true; toast('更新失败，先继续用之前的数据'); return; }
       showLoading('下载到第 ' + (i + 1) + ' 步时断了', '可能是网络不稳定，或者 OpenStreetMap 的数据服务器正忙。已经下载好的部分都保存了，过一会儿点重试，会从断开的地方继续。（' + (err && err.message ? err.message : err) + '）', true);
     });
@@ -1079,7 +1116,7 @@ function syncNow(loud){
   if(syncing){ syncAgain = true; return Promise.resolve(); }
   syncing = true; syncErr = null; setSyncUi('busy');
   var up = [], upTs = {}, down = 0;
-  return sb.from('checkins').select('park_id,date,note,deleted,updated_at').then(function(res){
+  return sb.from('checkins').select('park_id,name,date,note,deleted,updated_at').then(function(res){
     if(res.error) throw res.error;
     var remote = {};
     (res.data || []).forEach(function(r){ remote[r.park_id] = r; });
@@ -1087,7 +1124,11 @@ function syncNow(loud){
       var r = remote[id], rt = Date.parse(r.updated_at) || 0, l = REC[id], lt = l ? (l.u || 1) : (TOMB[id] || 0);
       if(rt > lt){
         if(r.deleted){ if(l){ delete REC[id]; down++; } TOMB[id] = rt; }
-        else { REC[id] = {date:r.date || null, note:r.note || '', u:rt}; delete TOMB[id]; if(!l || l.date !== r.date || (l.note || '') !== (r.note || '')) down++; }
+        else {
+          var title = /\|u\|/.test(id) && r.name && !/·无名公园$/.test(r.name) ? r.name : null;
+          REC[id] = {date:r.date || null, note:r.note || '', u:rt}; if(title) REC[id].title = title; delete TOMB[id];
+          if(!l || l.date !== r.date || (l.note || '') !== (r.note || '') || (l.title || null) !== title) down++;
+        }
         delete DIRTY[id];
       } else if(lt > rt) DIRTY[id] = 1;
     });
@@ -1096,7 +1137,7 @@ function syncNow(loud){
     Object.keys(DIRTY).forEach(function(id){
       var l = REC[id], ts = l ? (l.u || 1) : TOMB[id]; if(!ts) { delete DIRTY[id]; return; }
       upTs[id] = ts;
-      up.push({user_id:user.id, park_id:id, name:nameOf(id), date:l ? (l.date || null) : null, note:l ? (l.note || '') : '', deleted:!l, updated_at:new Date(ts).toISOString()});
+      up.push({user_id:user.id, park_id:id, name:(l && l.title) || nameOf(id), date:l ? (l.date || null) : null, note:l ? (l.note || '') : '', deleted:!l, updated_at:new Date(ts).toISOString()});
     });
     saveRec();
     if(!up.length) return {};
@@ -1161,6 +1202,30 @@ if(sb){
 document.addEventListener('visibilitychange', function(){ if(document.visibilityState === 'visible' && user && (!lastSync || Date.now() - lastSync > 20000)) syncNow(false); });
 window.addEventListener('online', function(){ if(user) syncNow(false); });
 setSyncUi();
+
+// ---------- City switch (东京 / 宁波) ----------
+function markRegionButtons(){ document.querySelectorAll('.regions button').forEach(function(b){ b.setAttribute('aria-pressed', String(b.dataset.r === REGION.id)); }); }
+function useBase(name){ if(!bases[name] || name === baseName) return; map.removeLayer(bases[baseName]); baseName = name; bases[name].addTo(map); setCredit(); }
+function fitBaseToRegion(){ // 地理院 maps only cover Japan
+  if(REGION.id !== 'tokyo'){ if(/地理院|航拍/.test(baseName) || (!hasGL && baseName !== 'OSM')) useBase(hasGL ? (darkPref ? '深色' : '浅色') : 'OSM'); }
+  else { var saved = S.get(K.base, null); if(saved && bases[saved]) useBase(saved); }
+}
+function switchRegion(id){
+  if(!REGIONS[id] || id === REGION.id) return;
+  REGION = REGIONS[id]; try{ localStorage.setItem('tpm.region', id); }catch(e){}
+  loadToken++; loading = false; $('#loading').hidden = true; map.closePopup();
+  DATA = null; BYID = new Map(); fpResults = [];
+  shapeLayer.clearLayers(); dotLayer.clearLayers(); boundaryLayer.clearLayers(); LAYERS.clear(); SHOWN.clear(); lastZoomBucket = null;
+  ui = S.get(rk(K.ui), {}) || {}; filt.muni = ui.muni || 'all'; filt.q = ''; $('#q').value = ''; listLimit = 200;
+  buildMuniSelect(); markRegionButtons();
+  $('#progress').textContent = ''; $('#list').textContent = ''; $('#sheetSummary').textContent = '正在加载' + REGION.all + '的公园…'; $('#subtitle').textContent = REGION.full;
+  view = S.get(rk(K.view), null);
+  if(view && view.c && view.z) map.setView(view.c, view.z); else map.fitBounds(REGION.view);
+  fitBaseToRegion();
+  loadData(false);
+}
+document.querySelector('.regions').addEventListener('click', function(ev){ var b = ev.target.closest('button[data-r]'); if(b) switchRegion(b.dataset.r); });
+markRegionButtons(); fitBaseToRegion(); $('#subtitle').textContent = REGION.full;
 
 loadData(false);
 })();
