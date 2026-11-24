@@ -829,6 +829,18 @@ function zoomToMuni(f){
 }
 
 // ---------- Location ----------
+function regionAt(pt){
+  return Object.keys(REGIONS).map(function(k){ return REGIONS[k]; }).filter(function(r){ var b = r.bbox; return pt[0] > b[0] && pt[0] < b[2] && pt[1] > b[1] && pt[1] < b[3]; })[0] || null;
+}
+function nearestToast(){
+  if(!DATA || !me) return;
+  var best = null, any = Infinity;
+  DATA.entities.forEach(function(e){ var d = hav(me, e.center); if(d < any) any = d; if(REC[e.id] || e.unnamed) return; if(!best || d < best.d) best = {e:e, d:d}; });
+  // The city's box is a rectangle, so a place such as Kyoto can fall inside Kansai's box without being covered.
+  if(any > 5000){ toast('你附近 5 km 内没有收录的公园，这里可能不在' + REGION.label + '的收录范围内'); return; }
+  if(best) toast('离你最近的未打卡：' + dispName(best.e) + '（' + fmtDist(best.d) + '）');
+}
+var afterLoad = null; // runs once the next city's park data is on the map
 function locate(fromSort){
   if(!navigator.geolocation){ toast('这个浏览器不支持定位'); return; }
   var btn = $('#locBtn'); btn.classList.add('busy');
@@ -837,11 +849,18 @@ function locate(fromSort){
     me = [p.coords.latitude, p.coords.longitude];
     if(!meMarker) meMarker = L.circleMarker(me, {radius:7, color:'#ffffff', weight:3, fillColor:C.me, fillOpacity:1, interactive:false, pane:'dots'}).addTo(map);
     else { meMarker.setLatLng(me); meMarker.bringToFront(); }
+    // You are in another city on the list: switch to it, then point out the nearest park there.
+    var here = regionAt(me);
+    if(!fromSort && here && here !== REGION){
+      switchRegion(here.id, {center:me, zoom:Math.max(map.getZoom(), 15)});
+      afterLoad = function(){ nearestToast(); renderList(); };
+      toast('你现在在' + here.label + '，已切换过去');
+      return;
+    }
     if(!fromSort) map.flyTo(me, Math.max(map.getZoom(), 15), {duration:.6});
     if(DATA){
-      var best = null;
-      DATA.entities.forEach(function(e){ if(REC[e.id]) return; var d = hav(me, e.center); if(!best || d < best.d) best = {e:e, d:d}; });
-      if(best) toast('离你最近的未打卡：' + dispName(best.e) + '（' + fmtDist(best.d) + '）');
+      if(here === REGION) nearestToast();
+      else if(!fromSort) toast('你现在不在已收录的城市范围内');
       renderList();
     }
   }, function(err){
@@ -1292,6 +1311,7 @@ function applyData(data, fit){
   if(window.syncSoon && Object.keys(DIRTY).length) window.syncSoon();
   maybeAutoMatch(data);
   if(fit) map.fitBounds(REGION.view);
+  if(afterLoad){ var f = afterLoad; afterLoad = null; setTimeout(f, 1500); } // after the "loaded" message
 }
 var loading = false;
 // Normal path: data/parks.json, built monthly on GitHub (one request, a few seconds).
@@ -1499,8 +1519,9 @@ function fitBaseToRegion(){ // 地理院 maps only cover Japan
   if(REGION.id !== 'tokyo'){ if(/地理院|航拍/.test(baseName) || (!hasGL && baseName !== 'OSM')) useBase(hasGL ? (darkPref ? '深色' : '浅色') : 'OSM'); }
   else { var saved = S.get(K.base, null); if(saved && bases[saved]) useBase(saved); }
 }
-function switchRegion(id){
+function switchRegion(id, at){
   if(!REGIONS[id] || id === REGION.id) return;
+  afterLoad = null;
   REGION = REGIONS[id]; try{ localStorage.setItem('tpm.region', id); }catch(e){}
   loadToken++; loading = false; $('#loading').hidden = true; map.closePopup();
   DATA = null; BYID = new Map(); fpResults = [];
@@ -1508,7 +1529,8 @@ function switchRegion(id){
   ui = S.get(rk(K.ui), {}) || {}; filt.muni = ui.muni || 'all'; filt.q = ''; $('#q').value = ''; listLimit = 200;
   buildMuniSelect(); markRegionButtons();
   $('#progress').textContent = ''; $('#list').textContent = ''; $('#sheetSummary').textContent = '正在加载' + REGION.all + '的公园…'; $('#subtitle').textContent = REGION.full;
-  view = {c:REGION.center, z:REGION.zoom}; map.setView(REGION.center, REGION.zoom); // always start at the city centre
+  var c = at ? at.center : REGION.center, zz = at ? at.zoom : REGION.zoom; // the city centre, or where you are
+  view = {c:c, z:zz}; map.setView(c, zz);
   fitBaseToRegion();
   loadData(false);
 }
