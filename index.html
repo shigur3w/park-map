@@ -187,6 +187,8 @@ button{cursor:pointer}
 .fp-list strong{display:block;font-weight:600}
 .fp-list small{display:block;color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
 .fp-list .tag{color:var(--visited);font-size:12px;margin-left:6px;font-weight:400}
+.fp-list .tag.off{color:var(--muted)}
+.fp-list .fp-city{position:sticky;top:0;z-index:1;padding:8px 0 4px;background:var(--surface);font-weight:600;font-size:13px;color:var(--accent);border-bottom:1px solid var(--line)}
 .toast{position:absolute;z-index:950;left:50%;transform:translateX(-50%);top:12px;background:var(--fg);color:var(--bg);
   padding:8px 14px;border-radius:20px;font-size:13px;max-width:calc(100% - 32px);box-shadow:var(--shadow)}
 .leaflet-control-layers{background:var(--surface);color:var(--fg);border-color:var(--line)!important}
@@ -317,8 +319,12 @@ body.immersive .toast{top:calc(env(safe-area-inset-top,0px) + 56px)}
         <button class="btn" id="exportBtn">导出打卡记录</button>
         <button class="btn" id="importBtn">导入打卡记录</button>
         <input type="file" id="importFile" accept="application/json,.json" hidden>
+        <h2 class="sub">一生足迹</h2>
+        <p id="fpStatus">还没有导入足迹。</p>
         <button class="btn primary" id="fpBtn">从一生足迹导入</button>
         <input type="file" id="fpFile" accept=".csv,text/csv" multiple hidden>
+        <button class="btn" id="fpRerun" hidden>重新比对足迹</button>
+        <button class="btn warn" id="fpDelete" hidden>删除保存的足迹</button>
         <h2 class="sub" id="muniHead">各区进度</h2>
         <div class="muni-list" id="muniList"></div>
       </div>
@@ -569,9 +575,26 @@ function restyle(e){
   L2.dot.setStyle(st.dot); L2.dot.setRadius(st.dot.radius);
 }
 // Only draw what is on screen: dots always, shapes from zoom 14.
-// Zoomed out, dots are decluttered the way map labels are: most important first, and a dot is skipped
-// when it would land closer than GAP pixels to one already placed. Zooming in lowers the gap.
+// Zoomed out, parks are thinned in two steps, the way map apps decide which places to show:
+// 1. each park gets a minimum zoom from its rank (size, encyclopedia entry, state/prefectural, name);
+//    small and unnamed parks only appear once you zoom in;
+// 2. among the parks allowed at this zoom, the most important are placed first and a dot is
+//    skipped when it would sit closer than GAP pixels to one already placed.
 var GAP = {8:26, 9:24, 10:20, 11:16, 12:12, 13:8};
+function minZoom(e){
+  if(e._mz == null){
+    var a = e.area || 0, len = e.len || 0, known = !!(e.wd || e.lv), mz;
+    if(e.kind === 'greenway') mz = len >= 3000 ? 0 : len >= 1000 ? 11 : len >= 300 ? 12 : 13;
+    else if(a >= 300000 || (known && a >= 10000)) mz = 0;        // 30 ha+, or well-known / public and 1 ha+
+    else if(a >= 50000 || known) mz = 11;                         // 5 ha+, or well-known / public
+    else if(a >= 10000 || (e.kind === 'garden' && a >= 5000)) mz = 12; // 1 ha+
+    else if(a >= 2000) mz = 13;                                   // 0.2 ha+
+    else mz = 14;                                                 // small or without an outline
+    if(e.unnamed) mz = Math.max(mz, a >= 50000 ? 13 : 14);       // unnamed parks wait until you zoom in
+    e._mz = mz;
+  }
+  return REC[e.id] ? Math.min(e._mz, 10) : e._mz;                 // your own check-ins show up earlier
+}
 function importance(e){
   if(e._imp == null){
     var size = e.kind === 'greenway' ? Math.log10(Math.max((e.len || 0) * 25, 100)) : Math.log10(Math.max(e.area || 0, 100)); // 1 ha = 4, 100 ha = 6
@@ -583,19 +606,20 @@ var hiddenCount = 0;
 function declutter(ids, z){
   hiddenCount = 0;
   if(z >= SHAPE_ZOOM) return ids;
-  var d = GAP[z] || (z < 8 ? 28 : 0); if(!d) return ids;
-  var arr = []; ids.forEach(function(id){ arr.push(BYID.get(id)); });
+  var d = GAP[z] || (z < 8 ? 28 : 0);
+  var arr = [];
+  ids.forEach(function(id){ var e = BYID.get(id); if(minZoom(e) <= z || id === currentId) arr.push(e); else hiddenCount++; });
   arr.sort(function(a, b){ return importance(b) - importance(a); });
   var grid = new Map(), out = new Set(), d2 = d * d;
   arr.forEach(function(e){
     var p = map.latLngToContainerPoint(e.center), gx = Math.floor(p.x / d), gy = Math.floor(p.y / d), free = true;
-    for(var dx = -1; dx <= 1 && free; dx++) for(var dy = -1; dy <= 1 && free; dy++){
+    if(d) for(var dx = -1; dx <= 1 && free; dx++) for(var dy = -1; dy <= 1 && free; dy++){
       var c = grid.get((gx + dx) + ',' + (gy + dy)); if(!c) continue;
       for(var i = 0; i < c.length; i++){ var q = c[i]; if((q.x - p.x) * (q.x - p.x) + (q.y - p.y) * (q.y - p.y) < d2){ free = false; break; } }
     }
-    if(free || e.id === currentId){ out.add(e.id); var k = gx + ',' + gy; if(!grid.has(k)) grid.set(k, []); grid.get(k).push(p); }
+    if(free || e.id === currentId){ out.add(e.id); if(d){ var k = gx + ',' + gy; if(!grid.has(k)) grid.set(k, []); grid.get(k).push(p); } }
+    else hiddenCount++;
   });
-  hiddenCount = arr.length - out.size;
   return out;
 }
 var lastZoomBucket = null;
@@ -608,7 +632,7 @@ function refreshView(){
     if(bb ? (bb[2] >= s && bb[0] <= n && bb[3] >= w && bb[1] <= ea) : (e.center[0] >= s && e.center[0] <= n && e.center[1] >= w && e.center[1] <= ea)) want.add(e.id);
   });
   want = declutter(want, z);
-  var hint = $('#zoomHint'); hint.hidden = !hiddenCount; if(hiddenCount) hint.textContent = '放大可看到全部 · 已省略 ' + hiddenCount.toLocaleString() + ' 处较小的公园';
+  var hint = $('#zoomHint'); hint.hidden = !hiddenCount; if(hiddenCount) hint.textContent = '放大可看到另外 ' + hiddenCount.toLocaleString() + ' 处小公园';
   SHOWN.forEach(function(st, id){
     if(want.has(id)) return; var L2 = LAYERS.get(id);
     dotLayer.removeLayer(L2.dot); if(st.shapes) L2.parts.forEach(function(p){ shapeLayer.removeLayer(p); });
@@ -890,8 +914,19 @@ $('#importFile').addEventListener('change', function(){
   rd.readAsText(f);
 });
 
-// ---------- Footprint import (一生足迹 CSV: track + photo locations) ----------
-function parseFootprint(text, box){
+// ---------- Footprints (一生足迹 CSV: track + photo locations) ----------
+// Imported walking points and photo locations are kept, in this browser and (when logged in) as a private
+// file in your Supabase storage, so every city can be matched, including cities and parks added later.
+// Each city remembers which footprint and which park data it was last matched against; when either is
+// newer, opening the city matches it again and checks in new places automatically. Places you un-checked
+// or left unticked in the review are never added back.
+var FP = null; // {n, lat:Int32Array (1e-5 deg), lon:Int32Array, t:Int32Array (unix s), ph:Uint8Array, stamp}
+var FP_PATH = function(){ return user.id + '/footprint.bin'; };
+var fpReady = DB.get('footprint').then(function(v){ if(v && v.n) FP = v; }).catch(function(){});
+function tzOf(region){ return region.country === '中国' ? 8 : 9; }
+function dayOf(t, tz){ var d = new Date((t + (tz || 9) * 3600) * 1000); return d.toISOString().slice(0, 10); }
+
+function parseFootprint(text){
   var lines = text.split(/\r?\n/), ix = {};
   lines[0].split(',').forEach(function(h, i){ ix[h.trim()] = i; });
   if(ix.longitude == null || ix.latitude == null || ix.dataTime == null) throw new Error('bad-csv');
@@ -899,7 +934,7 @@ function parseFootprint(text, box){
   for(var i = 1; i < lines.length; i++){
     var c = lines[i].split(','); if(c.length < 4) continue;
     var lat = +c[ix.latitude], lon = +c[ix.longitude], t = +c[ix.dataTime];
-    if(!(lat > box[0] && lat < box[2] && lon > box[1] && lon < box[3]) || !t) continue;
+    if(!(lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) || !t || (lat === 0 && lon === 0)) continue;
     var photo = (ix.locType != null && c[ix.locType].trim() === '0') || (ix.stepType != null && c[ix.stepType].trim() === '1');
     var acc = ix.accuracy != null ? +c[ix.accuracy] : 0;
     if(acc > 80) continue;
@@ -907,18 +942,71 @@ function parseFootprint(text, box){
   }
   return out;
 }
-function cleanFootprint(pts){
+function cleanFootprint(pts){ // dedupe, then drop train/car points (faster than ~25 km/h on both sides)
   var seen = new Set(), u = [];
   pts.sort(function(a, b){ return a.t - b.t; }).forEach(function(p){ var k = p.t + ',' + p.lat.toFixed(5) + ',' + p.lon.toFixed(5); if(!seen.has(k)){ seen.add(k); u.push(p); } });
   var track = u.filter(function(p){ return !p.photo; }), keep = u.filter(function(p){ return p.photo; });
   for(var i = 0; i < track.length; i++){
     var p = track[i], sp = [];
     [track[i-1], track[i+1]].forEach(function(q){ if(q){ var dt = Math.abs(q.t - p.t); if(dt > 0 && dt < 600) sp.push(hav([p.lat, p.lon], [q.lat, q.lon]) / dt); } });
-    if(sp.length && Math.min.apply(null, sp) > 7) continue; // trains and cars
+    if(sp.length && Math.min.apply(null, sp) > 7) continue;
     keep.push(p);
   }
   return keep;
 }
+// Packed form: typed arrays sorted by time; merging dedupes on time + position.
+function packFP(list){
+  list.sort(function(a, b){ return a.t - b.t || a.lat - b.lat || a.lon - b.lon; });
+  var out = [], last = null;
+  list.forEach(function(p){ if(last && last.t === p.t && last.lat === p.lat && last.lon === p.lon){ if(p.ph) last.ph = 1; return; } out.push(p); last = p; });
+  var n = out.length, fp = {n:n, lat:new Int32Array(n), lon:new Int32Array(n), t:new Int32Array(n), ph:new Uint8Array(n), stamp:Date.now()};
+  out.forEach(function(p, i){ fp.lat[i] = p.lat; fp.lon[i] = p.lon; fp.t[i] = p.t; fp.ph[i] = p.ph; });
+  return fp;
+}
+function fpList(fp){ var a = []; if(fp) for(var i = 0; i < fp.n; i++) a.push({lat:fp.lat[i], lon:fp.lon[i], t:fp.t[i], ph:fp.ph[i]}); return a; }
+function mergeFP(a, b){ // union of two packed footprints
+  var m = packFP(fpList(a).concat(fpList(b)));
+  m.stamp = Math.max(Date.now(), (a && a.stamp || 0) + 1, (b && b.stamp || 0) + 1);
+  return m;
+}
+function ptsToPacked(pts){ return pts.map(function(p){ return {lat:Math.round(p.lat * 1e5), lon:Math.round(p.lon * 1e5), t:p.t, ph:p.photo ? 1 : 0}; }); }
+function fpInBox(fp, b){ // points inside a region's box, as {lat, lon, t, photo}
+  var out = []; if(!fp) return out;
+  var s = Math.round(b[0] * 1e5), w = Math.round(b[1] * 1e5), n = Math.round(b[2] * 1e5), e = Math.round(b[3] * 1e5);
+  for(var i = 0; i < fp.n; i++){ var la = fp.lat[i], lo = fp.lon[i]; if(la > s && la < n && lo > w && lo < e) out.push({lat:la / 1e5, lon:lo / 1e5, t:fp.t[i], photo:!!fp.ph[i]}); }
+  return out;
+}
+// Storage format: "FP02", n, stamp, then delta-coded int32 columns and the photo flags; gzip when available.
+function encodeFP(fp){
+  var n = fp.n, buf = new ArrayBuffer(16 + n * 13), dv = new DataView(buf);
+  dv.setUint32(0, 0x46503032); dv.setUint32(4, n); dv.setFloat64(8, fp.stamp);
+  var cols = [fp.lat, fp.lon, fp.t], off = 16;
+  cols.forEach(function(c){ var prev = 0; for(var i = 0; i < n; i++){ dv.setInt32(off, c[i] - prev, true); prev = c[i]; off += 4; } });
+  new Uint8Array(buf, off, n).set(fp.ph);
+  var blob = new Blob([buf]);
+  if(typeof CompressionStream === 'undefined') return Promise.resolve(blob);
+  return new Response(blob.stream().pipeThrough(new CompressionStream('gzip'))).blob();
+}
+function decodeFP(blob){
+  return blob.arrayBuffer().then(function(ab){
+    var head = new Uint8Array(ab, 0, 2);
+    if(head[0] === 0x1f && head[1] === 0x8b) return new Response(new Blob([ab]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+    return ab;
+  }).then(function(ab){
+    var dv = new DataView(ab); if(dv.getUint32(0) !== 0x46503032) throw new Error('unknown footprint format');
+    var n = dv.getUint32(4), fp = {n:n, lat:new Int32Array(n), lon:new Int32Array(n), t:new Int32Array(n), ph:new Uint8Array(n), stamp:dv.getFloat64(8)}, off = 16;
+    [fp.lat, fp.lon, fp.t].forEach(function(c){ var prev = 0; for(var i = 0; i < n; i++){ prev += dv.getInt32(off, true); c[i] = prev; off += 4; } });
+    fp.ph.set(new Uint8Array(ab, off, n));
+    return fp;
+  });
+}
+function saveFP(fp, dirty){
+  FP = fp; S.set('tpm.fpDirty', !!dirty || !!S.get('tpm.fpDirty', false));
+  return DB.set('footprint', fp).then(function(){ renderFpStatus(); });
+}
+
+// Matching one city: a park counts when a photo, or two walking points, fall inside it (or within a few
+// metres); a greenway needs points spread over 100 m along it, so crossing it on a street does not count.
 function distToPath(lat, lon, c){
   var kx = 111320 * Math.cos(lat * Math.PI / 180), ky = 110540, best = Infinity;
   for(var i = 1; i < c.length; i++){
@@ -928,8 +1016,7 @@ function distToPath(lat, lon, c){
   }
   return best;
 }
-function dayOf(t){ var d = new Date((t + 9 * 3600) * 1000); return d.toISOString().slice(0, 10); }
-function matchFootprint(pts){
+function matchFootprint(pts, entities, tz){
   var CELL = 0.002, grid = new Map();
   pts.forEach(function(p){ var k = Math.floor(p.lat / CELL) + ',' + Math.floor(p.lon / CELL); var a = grid.get(k); if(!a){ a = []; grid.set(k, a); } a.push(p); });
   function near(b){
@@ -938,7 +1025,7 @@ function matchFootprint(pts){
     return out;
   }
   var res = [];
-  DATA.entities.forEach(function(e){
+  entities.forEach(function(e){
     var polys = e.geoms.filter(function(g){ return g.t === 'poly'; }), lines = e.geoms.filter(function(g){ return g.t === 'line'; });
     var buf = e.kind === 'greenway' ? 20 : ((e.area || 0) < 3000 ? 25 : 15), pad = 0.0005;
     var b = e.bb ? [e.bb[0]-pad, e.bb[1]-pad, e.bb[2]+pad, e.bb[3]+pad] : [e.center[0]-pad, e.center[1]-pad, e.center[0]+pad, e.center[1]+pad];
@@ -956,67 +1043,208 @@ function matchFootprint(pts){
       ok = (track + photos * 2 >= 4) && spread >= 100;
     } else ok = photos >= 1 || track >= 2;
     if(!ok) return;
-    var days = new Set(); hits.forEach(function(p){ days.add(dayOf(p.t)); });
+    var days = new Set(); hits.forEach(function(p){ days.add(dayOf(p.t, tz)); });
     var ts = hits.map(function(p){ return p.t; }).sort(function(x, y){ return x - y; });
-    res.push({e:e, first:dayOf(ts[0]), last:dayOf(ts[ts.length-1]), days:days.size, photos:photos});
+    res.push({e:e, first:dayOf(ts[0], tz), last:dayOf(ts[ts.length-1], tz), days:days.size, photos:photos});
   });
   return res.sort(function(a, b){ return (!!REC[a.e.id] - !!REC[b.e.id]) || b.days - a.days || b.photos - a.photos; });
 }
-var fpResults = [];
-$('#fpBtn').addEventListener('click', function(){
-  if(!DATA){ toast('公园数据还没加载好，等地图出来再导入'); return; }
-  $('#fpFile').click();
+function matchStamp(region, data){ return (FP ? FP.stamp : 0) + '|' + (data ? data.fetchedAt : 'none'); }
+function setMatched(regionId, stamp){ var m = S.get('tpm.fpMatched', {}) || {}; m[regionId] = stamp; S.set('tpm.fpMatched', m); }
+function noteFor(r, auto){ return (auto ? '足迹自动识别：' : '足迹识别：') + '去过 ' + r.days + ' 天' + (r.photos ? '，' + r.photos + ' 张照片' : ''); }
+function applyMatch(r, auto){
+  var old = REC[r.e.id];
+  REC[r.e.id] = {date:(old && old.date) || r.first, note:old && old.note && old.note !== '之前去过' ? old.note : noteFor(r, auto)};
+  if(old && old.title) REC[r.e.id].title = old.title;
+  touch(r.e.id);
+}
+// Park data for any city: the copy in this browser, else the prebuilt file (kept for next time).
+function regionData(region){
+  if(region === REGION && DATA) return Promise.resolve(DATA);
+  return DB.get(region.dbKey).then(function(d){
+    if(d && d.v === DATA_VER && d.entities && d.entities.length) return d;
+    return fetch('data/' + region.file, {cache:'no-cache'}).then(function(r){ if(!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function(d2){ if(d2.v !== DATA_VER) throw new Error('format'); DB.set(region.dbKey, d2); return d2; });
+  });
+}
+// Opening a city whose park data or footprint changed since it was last matched: check in new places
+// automatically, never re-adding ones you un-checked (those keep a tombstone).
+var autoBusy = false;
+function maybeAutoMatch(data){
+  fpReady.then(function(){
+    if(!FP || !data || autoBusy) return;
+    var region = REGIONS[data.region] || REGION, stamp = matchStamp(region, data), m = S.get('tpm.fpMatched', {}) || {};
+    if(m[region.id] === stamp || S.get('tpm.fpHold', null) === FP.stamp) return;
+    autoBusy = true;
+    setTimeout(function(){
+      try{
+        var pts = fpInBox(FP, region.bbox), n = 0;
+        if(pts.length){
+          matchFootprint(pts, data.entities, tzOf(region)).forEach(function(r){
+            if(REC[r.e.id] || TOMB[r.e.id]) return;
+            applyMatch(r, true); n++;
+          });
+        }
+        setMatched(region.id, stamp);
+        if(n){ saveRec(); if(DATA === data){ DATA.entities.forEach(restyle); renderProgress(); renderList(); renderMenu(); refreshView(); } toast('根据保存的足迹，在' + region.label + '自动打卡了 ' + n + ' 处'); }
+      } finally { autoBusy = false; }
+    }, 300);
+  });
+}
+
+// Review after an import: every city, grouped.
+var fpResults = []; // [{region, data, list:[match...]}]
+function matchAllCities(){
+  var groups = [], todo = Object.keys(REGIONS).map(function(k){ return REGIONS[k]; });
+  var step = 0;
+  function next(){
+    if(step >= todo.length) return Promise.resolve(groups);
+    var region = todo[step++], pts = fpInBox(FP, region.bbox);
+    if(!pts.length){ groups.push({region:region, data:null, list:[], pts:0}); return next(); }
+    $('#loadTitle').textContent = '正在比对' + region.label + '（' + step + '/' + todo.length + '）';
+    return regionData(region).then(function(data){
+      groups.push({region:region, data:data, list:matchFootprint(pts, data.entities, tzOf(region)), pts:pts.length});
+    }, function(){ groups.push({region:region, data:null, list:[], pts:pts.length, failed:true}); })
+      .then(function(){ return new Promise(function(r){ setTimeout(r, 20); }); }).then(next);
+  }
+  return next();
+}
+function startReview(intro){
+  showLoading('正在比对足迹', '在你的浏览器里比对，' + (user ? '足迹保存在你自己的 Supabase 账号里。' : '数据不会上传到任何地方。'), false);
+  return matchAllCities().then(function(groups){ $('#loading').hidden = true; fpResults = groups; showFootprint(intro); });
+}
+$('#fpBtn').addEventListener('click', function(){ $('#fpFile').click(); });
+$('#fpRerun').addEventListener('click', function(){ if(!FP){ toast('还没有保存的足迹'); return; } $('#menu').hidden = true; startReview(''); });
+$('#fpDelete').addEventListener('click', function(){
+  var b = this;
+  if(!b.dataset.armed){ b.dataset.armed = '1'; b.textContent = '再点一次确认删除'; setTimeout(function(){ delete b.dataset.armed; b.textContent = '删除保存的足迹'; }, 3000); return; }
+  delete b.dataset.armed; b.textContent = '删除保存的足迹';
+  FP = null; DB.del('footprint'); S.set('tpm.fpDirty', false); S.set('tpm.fpMatched', {}); S.set('tpm.fpSeen', null);
+  var done = function(){ renderFpStatus(); toast('已删除保存的足迹，打卡记录不受影响'); };
+  if(sb && user) sb.storage.from('footprints').remove([FP_PATH()]).then(done, done); else done();
 });
 $('#fpFile').addEventListener('change', function(){
   var files = Array.prototype.slice.call(this.files || []), input = this; if(!files.length) return;
   $('#menu').hidden = true;
-  showLoading('正在比对足迹', '在你的浏览器里读取 ' + files.length + ' 个文件，数据不会上传到任何地方。', false);
+  showLoading('正在读取足迹', '在你的浏览器里读取 ' + files.length + ' 个文件。', false);
   setTimeout(function(){
     Promise.all(files.map(function(f){ return f.text(); })).then(function(texts){
       var pts = [];
-      texts.forEach(function(t){ pts = pts.concat(parseFootprint(t, REGION.bbox)); });
-      pts = cleanFootprint(pts);
-      fpResults = matchFootprint(pts);
-      $('#loading').hidden = true; input.value = '';
-      showFootprint(pts.length);
+      texts.forEach(function(t){ pts = pts.concat(parseFootprint(t)); });
+      var fresh = packFP(ptsToPacked(cleanFootprint(pts)));
+      var before = FP ? FP.n : 0, merged = FP ? mergeFP(FP, fresh) : fresh;
+      input.value = '';
+      return saveFP(merged, true).then(function(){
+        S.set('tpm.fpHold', null);
+        if(user) syncFootprint(false);
+        return startReview('足迹共 ' + merged.n.toLocaleString() + ' 个点' + (before ? '（这次新增 ' + Math.max(0, merged.n - before).toLocaleString() + ' 个）' : '') + '。');
+      });
     }).catch(function(err){
       input.value = ''; $('#loading').hidden = true;
       toast(err && err.message === 'bad-csv' ? '请选择一生足迹导出的 CSV 文件（backUpData 或 backUpPhotoData）' : '读取时出错了：' + (err && err.message ? err.message : err));
     });
   }, 50);
 });
-function showFootprint(nPts){
+function showFootprint(intro){
   var ul = $('#fpList'); ul.textContent = '';
-  var fresh = fpResults.filter(function(r){ return !REC[r.e.id]; }).length;
-  $('#fpSummary').textContent = REGION.all + '范围内有 ' + nPts.toLocaleString() + ' 个步行足迹点和照片点，对上了 ' + fpResults.length + ' 处公园和绿道，其中 ' + fresh + ' 处还没打卡。打卡日期用第一次去的那天。';
-  if(!fpResults.length){ ul.appendChild(el('li', 'empty', '没有对上的地方')); }
-  fpResults.forEach(function(r, i){
-    var li = el('li'), lab = el('label'), cb = el('input'); cb.type = 'checkbox'; cb.id = 'fp' + i; cb.dataset.i = i;
-    var had = REC[r.e.id]; cb.checked = !had || !had.date;
-    lab.setAttribute('for', cb.id); lab.appendChild(cb);
-    var t = el('span'), s = el('strong', null, dispName(r.e));
-    if(had) s.appendChild(el('span', 'tag', had.date ? '已打卡' : '已打卡，补上日期'));
-    t.appendChild(s);
-    t.appendChild(el('small', null, KIND_LABEL[r.e.kind] + ' · ' + r.e.munis.join('/') + ' · 去过 ' + r.days + ' 天' + (r.photos ? ' · ' + r.photos + ' 张照片' : '') + ' · 首次 ' + r.first.replace(/-/g, '.') + (r.days > 1 ? ' · 最近 ' + r.last.replace(/-/g, '.') : '')));
-    lab.appendChild(t); li.appendChild(lab); ul.appendChild(li);
+  var total = 0, fresh = 0, cities = [];
+  fpResults.forEach(function(g){ total += g.list.length; fresh += g.list.filter(function(r){ return !REC[r.e.id]; }).length; if(g.list.length) cities.push(g.region.label + ' ' + g.list.length); });
+  $('#fpSummary').textContent = (intro || '') + '对上了 ' + total + ' 处公园和绿道' + (cities.length ? '（' + cities.join('、') + '）' : '') + '，其中 ' + fresh + ' 处还没打卡。没勾选的地方以后也不会被自动打卡。';
+  if(!total) ul.appendChild(el('li', 'empty', '没有对上的地方'));
+  fpResults.forEach(function(g, gi){
+    if(g.failed) ul.appendChild(el('li', 'empty', g.region.label + '的公园数据没下载下来，先跳过'));
+    if(!g.list.length) return;
+    ul.appendChild(el('li', 'fp-city', g.region.label + ' · ' + g.list.length + ' 处'));
+    g.list.forEach(function(r, i){
+      var li = el('li'), lab = el('label'), cb = el('input'); cb.type = 'checkbox'; cb.id = 'fp' + gi + '_' + i; cb.dataset.g = gi; cb.dataset.i = i;
+      var had = REC[r.e.id]; cb.checked = (!had && !TOMB[r.e.id]) || (had && !had.date);
+      lab.setAttribute('for', cb.id); lab.appendChild(cb);
+      var t = el('span'), s = el('strong', null, dispName(r.e));
+      if(had) s.appendChild(el('span', 'tag', had.date ? '已打卡' : '已打卡，补上日期'));
+      else if(TOMB[r.e.id]) s.appendChild(el('span', 'tag off', '之前取消过'));
+      t.appendChild(s);
+      t.appendChild(el('small', null, KIND_LABEL[r.e.kind] + ' · ' + r.e.munis.join('/') + ' · 去过 ' + r.days + ' 天' + (r.photos ? ' · ' + r.photos + ' 张照片' : '') + ' · 首次 ' + r.first.replace(/-/g, '.') + (r.days > 1 ? ' · 最近 ' + r.last.replace(/-/g, '.') : '')));
+      lab.appendChild(t); li.appendChild(lab); ul.appendChild(li);
+    });
   });
   $('#fpPanel').hidden = false; $('#fpList').scrollTop = 0; fpCount();
 }
-function fpCount(){ var n = document.querySelectorAll('#fpList input:checked').length; $('#fpApply').textContent = n ? '打卡选中的 ' + n + ' 处' : '没有选中'; $('#fpApply').disabled = !n; }
+function fpCount(){ var n = document.querySelectorAll('#fpList input:checked').length; $('#fpApply').textContent = n ? '打卡选中的 ' + n + ' 处' : '一处都不打卡'; }
 $('#fpList').addEventListener('change', fpCount);
 $('#fpAll').addEventListener('click', function(){ document.querySelectorAll('#fpList input').forEach(function(c){ c.checked = true; }); fpCount(); });
 $('#fpNone').addEventListener('click', function(){ document.querySelectorAll('#fpList input').forEach(function(c){ c.checked = false; }); fpCount(); });
-$('#fpCancel').addEventListener('click', function(){ $('#fpPanel').hidden = true; });
+// "先不打卡": nothing changes, and automatic matching waits until you review this footprint (menu: 重新比对).
+$('#fpCancel').addEventListener('click', function(){ $('#fpPanel').hidden = true; if(FP) S.set('tpm.fpHold', FP.stamp); toast('先不打卡。想再看时，在「数据」里点「重新比对足迹」'); });
 $('#fpApply').addEventListener('click', function(){
-  var n = 0;
+  var n = 0, skipped = 0;
   document.querySelectorAll('#fpList input').forEach(function(c){
-    if(!c.checked) return; var r = fpResults[+c.dataset.i], old = REC[r.e.id];
-    var note = '足迹识别：去过 ' + r.days + ' 天' + (r.photos ? '，' + r.photos + ' 张照片' : '');
-    REC[r.e.id] = {date: (old && old.date) || r.first, note: old && old.note && old.note !== '之前去过' ? old.note : note}; if(old && old.title) REC[r.e.id].title = old.title; touch(r.e.id); n++;
+    var g = fpResults[+c.dataset.g], r = g.list[+c.dataset.i];
+    if(c.checked){ applyMatch(r, false); n++; }
+    else if(!REC[r.e.id] && !TOMB[r.e.id]){ TOMB[r.e.id] = Date.now(); DIRTY[r.e.id] = 1; skipped++; } // remember "not this one"
   });
-  saveRec(); DATA.entities.forEach(restyle); renderProgress(); renderList(); renderMenu();
-  $('#fpPanel').hidden = true; toast('已根据足迹打卡 ' + n + ' 处');
+  fpResults.forEach(function(g){ setMatched(g.region.id, matchStamp(g.region, g.data)); });
+  S.set('tpm.fpHold', null);
+  saveRec(); if(window.syncSoon) window.syncSoon();
+  if(DATA){ DATA.entities.forEach(restyle); renderProgress(); renderList(); renderMenu(); refreshView(); }
+  $('#fpPanel').hidden = true; toast('已根据足迹打卡 ' + n + ' 处' + (skipped ? '，' + skipped + ' 处以后不再提示' : ''));
 });
+function renderFpStatus(){
+  var p = $('#fpStatus'); if(!p) return;
+  $('#fpRerun').hidden = $('#fpDelete').hidden = !FP;
+  if(!FP){ p.textContent = '还没有导入足迹。'; return; }
+  var first = FP.n ? dayOf(FP.t[0]) : '', last = FP.n ? dayOf(FP.t[FP.n - 1]) : '';
+  p.textContent = '已保存足迹 ' + FP.n.toLocaleString() + ' 个点（' + first.replace(/-/g, '.') + ' – ' + last.replace(/-/g, '.') + '）' +
+    (user ? (S.get('tpm.fpDirty', false) ? '，等待上传到云端' : '，已存到云端') : '，只在这个浏览器里') + '。新增城市或公园数据更新时会自动比对。';
+}
+fpReady.then(renderFpStatus);
+
+// Footprint in Supabase storage: one private file per account (bucket "footprints", folder = your user id).
+var fpSyncing = false;
+function syncFootprint(loud){
+  if(!sb || !user || fpSyncing) return Promise.resolve();
+  fpSyncing = true;
+  return fpReady.then(function(){
+    return sb.storage.from('footprints').list(user.id, {search:'footprint.bin'});
+  }).then(function(res){
+    if(res.error) throw res.error;
+    var obj = (res.data || []).filter(function(o){ return o.name === 'footprint.bin'; })[0];
+    var remoteAt = obj ? (obj.updated_at || obj.created_at) : null, seen = S.get('tpm.fpSeen', null);
+    var getRemote = (obj && remoteAt !== seen) ? sb.storage.from('footprints').download(FP_PATH()).then(function(r){ if(r.error) throw r.error; return decodeFP(r.data); }) : Promise.resolve(null);
+    return getRemote.then(function(remote){
+      var changed = false;
+      if(remote){
+        var before = FP ? FP.n : 0;
+        var merged = FP ? mergeFP(FP, remote) : remote;
+        if(merged.n > remote.n) S.set('tpm.fpDirty', true);      // this device has points the cloud lacks
+        if(!FP || merged.n !== before){ changed = true; return saveFP(merged, false).then(function(){ S.set('tpm.fpSeen', remoteAt); return changed; }); }
+        S.set('tpm.fpSeen', remoteAt);
+      }
+      return changed;
+    });
+  }).then(function(changed){
+    if(!FP || !S.get('tpm.fpDirty', false)) return changed;
+    return encodeFP(FP).then(function(blob){ return blob.arrayBuffer(); }).then(function(bytes){
+      // raw bytes (a Blob would be sent as a multipart form)
+      return sb.storage.from('footprints').upload(FP_PATH(), bytes, {upsert:true, contentType:'application/octet-stream', cacheControl:'0'});
+    }).then(function(r){
+      if(r.error) throw r.error;
+      S.set('tpm.fpDirty', false);
+      return sb.storage.from('footprints').list(user.id, {search:'footprint.bin'}).then(function(l){
+        var o = (l.data || []).filter(function(x){ return x.name === 'footprint.bin'; })[0]; if(o) S.set('tpm.fpSeen', o.updated_at || o.created_at);
+        if(loud) toast('足迹已存到云端');
+        return changed;
+      });
+    });
+  }).then(function(changed){
+    fpSyncing = false; renderFpStatus();
+    if(changed && DATA) maybeAutoMatch(DATA);
+  }).catch(function(err){
+    fpSyncing = false; renderFpStatus();
+    var m = (err && (err.message || err.error)) || String(err);
+    if(/bucket not found|not found/i.test(m) && !FP) return; // nothing stored yet and no bucket: quiet
+    var p = $('#fpStatus'); if(p) p.textContent += /bucket/i.test(m) ? '（云端还没建好足迹存储，请在 Supabase 运行 supabase-setup.sql 的最新版本）' : '（足迹同步失败：' + m + '）';
+  });
+}
 
 // ---------- Records from older versions; seed visited parks ----------
 // Old ids were "p|名前"; if that name now exists in several places, attach the record to the one in 世田谷/杉並.
@@ -1062,6 +1290,7 @@ function applyData(data, fit){
   DATA = data; BYID = new Map(); data.entities.forEach(function(e){ BYID.set(e.id, e); });
   migrateRecords(); seed(); drawAll(); renderProgress(); renderList(); renderMenu();
   if(window.syncSoon && Object.keys(DIRTY).length) window.syncSoon();
+  maybeAutoMatch(data);
   if(fit) map.fitBounds(REGION.view);
 }
 var loading = false;
@@ -1193,7 +1422,6 @@ function syncNow(loud){
       } else if(lt > rt) DIRTY[id] = 1;
     });
     Object.keys(REC).forEach(function(id){ if(!remote[id]) DIRTY[id] = 1; });
-    Object.keys(TOMB).forEach(function(id){ if(!remote[id]){ delete TOMB[id]; delete DIRTY[id]; } }); // never uploaded: nothing to delete
     Object.keys(DIRTY).forEach(function(id){
       var l = REC[id], ts = l ? (l.u || 1) : TOMB[id]; if(!ts) { delete DIRTY[id]; return; }
       upTs[id] = ts;
@@ -1207,6 +1435,7 @@ function syncNow(loud){
     Object.keys(upTs).forEach(function(id){ var l = REC[id], ts = l ? (l.u || 1) : TOMB[id]; if(ts === upTs[id]) delete DIRTY[id]; });
     lastSync = Date.now(); S.set('tpm.lastSync', lastSync); saveRec();
     if(DATA && down){ DATA.entities.forEach(restyle); renderProgress(); renderList(); renderMenu(); }
+    syncFootprint(false);
     if(loud || down) toast('已同步' + (down ? '：从云端更新了 ' + down + ' 条' : '') + (up.length ? (down ? '，' : '：') + '上传了 ' + up.length + ' 条' : (down ? '' : '，没有新变化')));
   }).catch(function(err){
     var m = (err && (err.message || err.error_description)) || String(err);

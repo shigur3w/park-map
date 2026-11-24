@@ -28,3 +28,24 @@ create policy "delete own checkins" on public.checkins for delete to authenticat
 -- 只给登录用户开放这张表，未登录的访问者什么都读不到
 revoke all on public.checkins from anon;
 grant select, insert, update, delete on public.checkins to authenticated;
+
+-- ===== 一生足迹的足迹文件（2026-11 新增） =====
+-- 私有存储桶：每个账号只能读写自己文件夹（文件夹名 = 账号 id）里的足迹文件。
+insert into storage.buckets (id, name, public)
+values ('footprints', 'footprints', false)
+on conflict (id) do nothing;
+
+drop policy if exists "read own footprint"   on storage.objects;
+drop policy if exists "insert own footprint" on storage.objects;
+drop policy if exists "update own footprint" on storage.objects;
+drop policy if exists "delete own footprint" on storage.objects;
+
+create policy "read own footprint" on storage.objects for select to authenticated
+  using (bucket_id = 'footprints' and (storage.foldername(name))[1] = (select auth.uid())::text);
+create policy "insert own footprint" on storage.objects for insert to authenticated
+  with check (bucket_id = 'footprints' and (storage.foldername(name))[1] = (select auth.uid())::text);
+create policy "update own footprint" on storage.objects for update to authenticated
+  using (bucket_id = 'footprints' and (storage.foldername(name))[1] = (select auth.uid())::text)
+  with check (bucket_id = 'footprints' and (storage.foldername(name))[1] = (select auth.uid())::text);
+create policy "delete own footprint" on storage.objects for delete to authenticated
+  using (bucket_id = 'footprints' and (storage.foldername(name))[1] = (select auth.uid())::text);
